@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "galaxy-sidm"
+version = "0.1.0"
+description = "Semi-analytical SIDM galaxy evolution models compared to AIDA-TNG simulations"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "jax",
+    "jaxlib",
+    "emcee",
+    "pandas",
+    "loky",
+    "h5py",          # HDF5 for simulation data
+    "pyyaml",        # Config file loading
+    "requests",      # API access for TNG
+    "astropy",       # Units, cosmology, coordinates
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ipython",
+    "jupyter",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

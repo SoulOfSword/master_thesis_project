@@ -1,2 +1,2 @@
-# master_thesis_project
-Repository for my Master's thesis -- initial commit
+# SIDM Simulations and Semi-analytical model
+Repository for my Master's thesis

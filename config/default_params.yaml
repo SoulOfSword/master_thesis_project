@@ -1,0 +1,35 @@
+# config/default_params.yaml
+# Default parameters for galaxy-sidm models
+
+cosmology:
+  H0: 67.74            # km/s/Mpc (Planck 2018)
+  Omega_m: 0.3089
+  Omega_b: 0.0486
+  Omega_Lambda: 0.6911
+  sigma_8: 0.8159
+  n_s: 0.9667
+
+sidm:
+  # Cross-section model: "constant" or "velocity_dependent"
+  model: "velocity_dependent"
+  # For constant: sigma/m in cm^2/g
+  sigma_m: 1.0
+  # For velocity-dependent (Yukawa-like): sigma = sigma_0 / (1 + (v/w)^2)^2
+  sigma_0: 50.0        # cm^2/g at low velocity
+  w: 30.0              # characteristic velocity in km/s
+
+evolution:
+  z_start: 10
+  z_end: 0
+  n_steps: 100
+
+# Halo model parameters
+halo:
+  profile: "nfw"       # "nfw", "einasto", "cored_nfw"
+  concentration_model: "duffy08"
+
+# Scaling relations to compute
+scaling_relations:
+  - tully_fisher       # M_star vs V_rot
+  - mass_size          # M_star vs R_eff
+  - fall_relation      # M_star vs j_star (specific angular momentum)
