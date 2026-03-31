@@ -10,6 +10,8 @@ from .kinematics import (
     rotation_curve_from_particles,
     half_mass_radius,
     lambda_R,
+    compute_circularity,
+    disc_fraction,
 )
 from .scaling import (
     ScalingRelationFit,

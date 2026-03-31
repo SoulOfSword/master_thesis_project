@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "default_params.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "default_params.yaml"
 
 
 def load_config(path = None):
