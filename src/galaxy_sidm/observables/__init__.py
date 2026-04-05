@@ -1,4 +1,4 @@
-"""Observable quantities and scaling relations (JAX-accelerated)."""
+"""Observable quantities and scaling relations."""
 
 from .kinematics import (
     circular_velocity_from_mass,
@@ -12,6 +12,10 @@ from .kinematics import (
     lambda_R,
     compute_circularity,
     disc_fraction,
+)
+from .density import (
+    measure_density_profile,
+    measure_inner_slope,
 )
 from .scaling import (
     ScalingRelationFit,

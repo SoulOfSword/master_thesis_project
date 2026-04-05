@@ -9,6 +9,7 @@ from .profiles import (
     isothermal_core_density,
     concentration_duffy08,
     nfw_scale_density,
+    fit_nfw,
 )
 from .sidm import (
     cross_section_constant,
