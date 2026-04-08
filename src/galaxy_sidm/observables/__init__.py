@@ -16,6 +16,7 @@ from .kinematics import (
 from .density import (
     measure_density_profile,
     measure_inner_slope,
+    compute_gamma_dm,
 )
 from .scaling import (
     ScalingRelationFit,

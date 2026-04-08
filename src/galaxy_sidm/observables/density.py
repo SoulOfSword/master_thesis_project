@@ -68,3 +68,67 @@ def measure_inner_slope(r_mid, rho, r_inner, r_outer):
     # Linear regression in log-log space
     coeffs = np.polyfit(log_r, log_rho, 1)
     return coeffs[0]  # slope = gamma
+
+
+def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
+    """Compute inner DM slope for all well-resolved halos across models.
+
+    Follows Despali+26 Fig. 5: gamma_DM is measured via a power-law fit in
+    log-log space over the radial range max(r_fit_min, 1 kpc) <= r <=
+    0.03*R200c.  For low-mass halos where 0.03*R200c is near the
+    resolution limit (fitting range < 1 kpc), r_outer is expanded to
+    10 kpc so the fit has enough bins (Despali+26 Fig. 5 caption).
+
+    Args:
+        catalogs: Dict of group catalogs per model. Each must have keys
+            'N_dm', 'M200c', 'R200c'.
+        model_profiles: Dict of pre-computed profile dicts per model, as
+            returned by ``load_precomputed_profiles``.
+        models: List of model names to process.
+        r_fit_min: Minimum reliable radius (3*eps) in kpc.
+        min_ndm: Minimum number of DM particles.
+
+    Returns:
+        Dict per model with arrays: 'M200c', 'R200c', 'gamma_dm', 'halo_ids'.
+    """
+    results = {}
+    for name in models:
+        cat = catalogs[name]
+        profs = model_profiles[name]
+
+        sel = (cat["N_dm"] >= min_ndm) & (cat["M200c"] > 0)
+        halo_ids = np.where(sel)[0]
+
+        gamma = np.full(len(halo_ids), np.nan)
+        for i, hid in enumerate(halo_ids):
+            if hid not in profs:
+                continue
+            prof = profs[hid]
+            r = prof["r_mid"]
+            rho = prof["prof_dm"]
+            if rho is None:
+                continue
+            r200 = cat["R200c"][hid]
+
+            r_inner = max(r_fit_min, 1.0)
+            r_outer = 0.03 * r200
+            # For low-mass halos where 0.03*R200c is near the resolution
+            # limit, expand to 10 kpc (Despali+26 Fig. 5 caption)
+            if r_outer < r_inner + 1.0:
+                r_outer = 10.0
+
+            if r_outer <= r_inner:
+                continue
+
+            gamma[i] = measure_inner_slope(r, rho, r_inner=r_inner, r_outer=r_outer)
+
+        valid = ~np.isnan(gamma)
+        results[name] = {
+            "M200c": cat["M200c"][halo_ids][valid],
+            "R200c": cat["R200c"][halo_ids][valid],
+            "gamma_dm": gamma[valid],
+            "halo_ids": halo_ids[valid],
+        }
+        print(f"{name}: {valid.sum()}/{len(halo_ids)} halos with valid gamma_DM")
+
+    return results
