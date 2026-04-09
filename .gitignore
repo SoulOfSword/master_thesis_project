@@ -1,6 +1,9 @@
 # Simulation data (large HDF5 files)
 *.hdf5
 
+# Profile cache (large pickle files, regenerated from $WORK)
+data/profile_cache/
+
 # macOS
 .DS_Store
 

@@ -67,17 +67,14 @@ def measure_inner_slope(r_mid, rho, r_inner, r_outer):
 
     # Linear regression in log-log space
     coeffs = np.polyfit(log_r, log_rho, 1)
-    return coeffs[0]  # slope = gamma
+    return coeffs[0]
 
 
 def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
     """Compute inner DM slope for all well-resolved halos across models.
 
     Follows Despali+26 Fig. 5: gamma_DM is measured via a power-law fit in
-    log-log space over the radial range max(r_fit_min, 1 kpc) <= r <=
-    0.03*R200c.  For low-mass halos where 0.03*R200c is near the
-    resolution limit (fitting range < 1 kpc), r_outer is expanded to
-    10 kpc so the fit has enough bins (Despali+26 Fig. 5 caption).
+    log-log space over the radial range 1 kpc <= r <= max(0.03*R200c, 10 kpc).
 
     Args:
         catalogs: Dict of group catalogs per model. Each must have keys
@@ -85,7 +82,8 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
         model_profiles: Dict of pre-computed profile dicts per model, as
             returned by ``load_precomputed_profiles``.
         models: List of model names to process.
-        r_fit_min: Minimum reliable radius (3*eps) in kpc.
+        r_fit_min: Minimum reliable radius in kpc (not used in current
+            implementation — kept for API compatibility).
         min_ndm: Minimum number of DM particles.
 
     Returns:
@@ -110,12 +108,8 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
                 continue
             r200 = cat["R200c"][hid]
 
-            r_inner = max(r_fit_min, 1.0)
-            r_outer = 0.03 * r200
-            # For low-mass halos where 0.03*R200c is near the resolution
-            # limit, expand to 10 kpc (Despali+26 Fig. 5 caption)
-            if r_outer < r_inner + 1.0:
-                r_outer = 10.0
+            r_inner = 1.0  # kpc, following Despali+26
+            r_outer = max(0.03*r200, 10.0)  # kpc
 
             if r_outer <= r_inner:
                 continue

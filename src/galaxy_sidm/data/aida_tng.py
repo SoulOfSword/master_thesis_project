@@ -3,11 +3,14 @@ Data is stored in HDF5 format.
 """
 
 from pathlib import Path
+import pickle
 import numpy as np
 import h5py
 
+CACHE_DIR = Path.home() / "master_thesis_project" / "data" / "profile_cache"
 
-def load_precomputed_profiles(run_path, snap, h=0.6774):
+
+def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False):
     """Load pre-computed density profiles from the postprocessing catalog.
 
     Reads ``cat_halo_profiles_{snap}.hdf5`` which contains spherically averaged
@@ -24,6 +27,8 @@ def load_precomputed_profiles(run_path, snap, h=0.6774):
             (e.g. ``AIDA_BASE / "L35n1080_CDM"``).
         snap: Snapshot number.
         h: Dimensionless Hubble parameter (default 0.6774, Planck 2016).
+        use_test: If True, load the ``_test`` variant of the catalog
+            (required for FP/hydro runs per Despali, priv. comm.).
 
     Returns:
         Dict mapping FoF index (int) to a dict with keys:
@@ -36,9 +41,18 @@ def load_precomputed_profiles(run_path, snap, h=0.6774):
         - ``prof_stars``: stellar density profile, shape (39,), or None
     """
     run_path = Path(run_path)
-    fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap:02d}.hdf5"
+    suffix = "_test" if use_test else ""
+    fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap:02d}{suffix}.hdf5"
     if not fpath.exists():
-        fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap}.hdf5"
+        fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap}{suffix}.hdf5"
+
+    # Check for cached version
+    run_name = run_path.name
+    cache_name = f"{run_name}_profiles_{snap:03d}{suffix}.pkl"
+    cache_path = CACHE_DIR / cache_name
+    if cache_path.exists():
+        with open(cache_path, "rb") as cf:
+            return pickle.load(cf)
 
     profiles = {}
     with h5py.File(fpath, "r") as f:
@@ -48,9 +62,8 @@ def load_precomputed_profiles(run_path, snap, h=0.6774):
             fof_id = int(key.split("_")[1])
             grp = f[key]
 
-            # Radii: stored as log10(ckpc/h), convert to physical kpc
             log_r_code = grp["r"][:]
-            r_edges = 10**log_r_code / h  # physical kpc
+            r_edges = 10**log_r_code / h
             r_mid = np.sqrt(r_edges[:-1] * r_edges[1:])
 
             prof = {
@@ -61,6 +74,12 @@ def load_precomputed_profiles(run_path, snap, h=0.6774):
                 "prof_stars": grp["prof_stars"][:] if "prof_stars" in grp else None,
             }
             profiles[fof_id] = prof
+
+    # Save cache
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "wb") as cf:
+        pickle.dump(profiles, cf, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"Cached {len(profiles)} profiles to {cache_path}")
 
     return profiles
 
