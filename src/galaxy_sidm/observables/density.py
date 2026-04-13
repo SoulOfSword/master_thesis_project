@@ -1,7 +1,7 @@
 """Density profile measurement from particle data."""
 
 import numpy as np
-
+import illustris_python as il
 
 def measure_density_profile(positions, masses, r_min, r_max, n_bins=40):
     """Measure a spherically averaged density profile from particles.
@@ -126,3 +126,122 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
         print(f"{name}: {valid.sum()}/{len(halo_ids)} halos with valid gamma_DM")
 
     return results
+
+
+def collect_profiles(profiles, halo_ids, r_common, components,
+                     sf_gas_cache=None):
+    """Interpolate and sum density profile components onto a common radial grid.
+
+    Args:
+        profiles: Dict mapping halo ID to profile dict.
+        halo_ids: Array of halo IDs to process.
+        r_common: Common radial grid in physical kpc.
+        components: List of profile keys to sum, e.g. ["prof_dm"],
+            ["prof_dm", "prof_stars"], or ["prof_dm", "prof_stars", "prof_sfgas"].
+            Use "prof_sfgas" to pull from sf_gas_cache instead of the profile dict.
+        sf_gas_cache: Dict mapping halo ID to SF gas density array.
+            Required when "prof_sfgas" is in components.
+
+    Returns:
+        Array of shape (N_halos, len(r_common)) with log10(rho), or None.
+    """
+    log_r_common = np.log10(r_common)
+    all_profiles = []
+
+    for hid in halo_ids:
+        if hid not in profiles:
+            continue
+        p = profiles[hid]
+        r_mid = p["r_mid"]
+
+        rho_total = np.zeros(len(r_mid))
+        skip = False
+        for comp in components:
+            if comp == "prof_sfgas":
+                if sf_gas_cache is None or hid not in sf_gas_cache:
+                    skip = True
+                    break
+                # SF gas is in Msun/kpc^3 (true density); catalog profiles
+                # use mass/(r^3 diff) without the 4pi/3 prefactor, so we
+                # multiply to match.
+                rho_total += sf_gas_cache[hid] * (4.0 / 3.0 * np.pi)
+            else:
+                rho_k = p[comp]
+                if rho_k is None:
+                    skip = True
+                    break
+                rho_total += rho_k
+        if skip:
+            continue
+
+        valid = rho_total > 0
+        if valid.sum() < 2:
+            continue
+
+        log_rho_interp = np.interp(
+            log_r_common, np.log10(r_mid[valid]), np.log10(rho_total[valid]),
+            left=np.nan, right=np.nan,
+        )
+        all_profiles.append(log_rho_interp)
+
+    if not all_profiles:
+        return None
+    return np.array(all_profiles)
+
+
+def measure_sf_gas_profile(basePath, snap, halo_id, r_edges, h=0.6774):
+    """Compute the density profile of star-forming gas for a single halo.
+
+    Loads PartType0 particles, selects those with StarFormationRate > 0,
+    and bins them into spherical shells defined by r_edges.
+
+    Args:
+        basePath: Path to the simulation output directory.
+        snap: Snapshot number.
+        halo_id: FoF group index.
+        r_edges: Radial bin edges in physical kpc, shape (n_bins+1,).
+        h: Hubble parameter for unit conversion.
+
+    Returns:
+        Density profile in each shell (Msun/kpc^3), shape (n_bins,).
+        Returns zeros if no star-forming gas is found.
+    """
+    
+    halo = il.groupcat.loadSingle(basePath, snap, haloID=halo_id)
+    halo_pos = halo["GroupPos"]  # ckpc/h
+
+    gas = il.snapshot.loadHalo(
+        basePath, snap, halo_id, "gas",
+        fields=["Coordinates", "Masses", "StarFormationRate"],
+    )
+
+    n_bins = len(r_edges) - 1
+    if gas is None or (isinstance(gas, dict) and gas.get("count", 0) == 0):
+        return np.zeros(n_bins)
+
+    if isinstance(gas, dict):
+        coords = gas["Coordinates"]
+        masses = gas["Masses"]
+        sfr = gas["StarFormationRate"]
+    else:
+        # Single field returns array directly
+        return np.zeros(n_bins)
+
+    # Filter star-forming gas
+    sf_mask = sfr > 0
+    if sf_mask.sum() == 0:
+        return np.zeros(n_bins)
+
+    pos = (coords[sf_mask] - halo_pos) / h  # physical kpc, centred
+    mass = masses[sf_mask] * 1e10 / h  # Msun
+
+    radii = np.linalg.norm(pos, axis=1)
+
+    rho = np.zeros(n_bins)
+    for i in range(n_bins):
+        in_shell = (radii >= r_edges[i]) & (radii < r_edges[i + 1])
+        shell_mass = np.sum(mass[in_shell])
+        shell_vol = (4.0 / 3.0) * np.pi * (r_edges[i + 1]**3 - r_edges[i]**3)
+        rho[i] = shell_mass / shell_vol
+
+    return rho
