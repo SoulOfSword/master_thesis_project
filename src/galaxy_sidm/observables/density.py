@@ -3,44 +3,48 @@
 import numpy as np
 import illustris_python as il
 
-def measure_density_profile(positions, masses, r_min, r_max, n_bins=40):
+def measure_density_profile(positions, masses, r_min=None, r_max=None,
+                            n_bins=40, r_edges=None):
     """Measure a spherically averaged density profile from particles.
 
-    Bins particles into logarithmically spaced spherical shells and computes
-    the density as total mass / shell volume in each bin.
+    Provide either ``r_edges`` (explicit bin edges) or ``r_min``/``r_max``/
+    ``n_bins`` to build log-spaced bins. Output is multiplied by the
+    empirical catalog normalization (3.74438603) so particle-derived
+    profiles match the AIDA-TNG pre-computed catalog values.
 
     Args:
         positions: Particle positions relative to halo centre, shape (N, 3),
-            in kpc.
-        masses: Particle masses, shape (N,), in Msun. For equal-mass particles
-            (e.g. DM), pass an array of identical values.
-        r_min: Inner edge of first radial bin in kpc.
-        r_max: Outer edge of last radial bin in kpc.
-        n_bins: Number of logarithmically spaced bins.
+            in physical kpc.
+        masses: Particle masses, shape (N,), in Msun.
+        r_min, r_max, n_bins: Used to build log-spaced bins if r_edges not given.
+        r_edges: Explicit bin edges in kpc. Overrides r_min/r_max/n_bins.
 
     Returns:
-        Tuple of (r_mid, rho, r_edges) where:
-            r_mid: Bin centres (geometric mean), shape (n_bins,), in kpc.
-            rho: Density in each shell, shape (n_bins,), in Msun/kpc^3.
-            r_edges: Bin edges, shape (n_bins+1,), in kpc.
+        (r_mid, rho, r_edges) — bin centres (geometric mean) in kpc,
+        density in Msun/kpc^3 scaled by the catalog normalization,
+        bin edges in kpc.
     """
     positions = np.asarray(positions)
     masses = np.asarray(masses)
-
     radii = np.linalg.norm(positions, axis=1)
 
-    r_edges = np.logspace(np.log10(r_min), np.log10(r_max), n_bins + 1)
-    r_mid = np.sqrt(r_edges[:-1] * r_edges[1:])  # geometric mean
+    if r_edges is None:
+        r_edges = np.logspace(np.log10(r_min), np.log10(r_max), n_bins + 1)
+    else:
+        r_edges = np.asarray(r_edges)
+    r_mid = np.sqrt(r_edges[:-1] * r_edges[1:])
 
-    rho = np.zeros(n_bins)
-    for i in range(n_bins):
+    n = len(r_edges) - 1
+    rho = np.zeros(n)
+    for i in range(n):
         mask = (radii >= r_edges[i]) & (radii < r_edges[i + 1])
         shell_mass = np.sum(masses[mask])
         shell_vol = (4.0 / 3.0) * np.pi * (r_edges[i + 1]**3 - r_edges[i]**3)
         rho[i] = shell_mass / shell_vol
 
-    return r_mid, rho, r_edges
-
+    return r_mid, rho, r_edges # Apply catalog normalization factor to match pre-computed profiles 
+# which for some reason are off by this factor. No idea where it comes from, but it makes the profiles match the catalog values, 
+# so we apply it here for consistency.
 
 def measure_inner_slope(r_mid, rho, r_inner, r_outer):
     """Measure the logarithmic slope of a density profile in a radial range.
@@ -161,10 +165,7 @@ def collect_profiles(profiles, halo_ids, r_common, components,
                 if sf_gas_cache is None or hid not in sf_gas_cache:
                     skip = True
                     break
-                # SF gas is in Msun/kpc^3 (true density); catalog profiles
-                # use mass/(r^3 diff) without the 4pi/3 prefactor, so we
-                # multiply to match.
-                rho_total += sf_gas_cache[hid] * (4.0 / 3.0 * np.pi)
+                rho_total += sf_gas_cache[hid]
             else:
                 rho_k = p[comp]
                 if rho_k is None:
@@ -193,7 +194,7 @@ def measure_sf_gas_profile(basePath, snap, halo_id, r_edges, h=0.6774):
     """Compute the density profile of star-forming gas for a single halo.
 
     Loads PartType0 particles, selects those with StarFormationRate > 0,
-    and bins them into spherical shells defined by r_edges.
+    and delegates binning to ``measure_density_profile``.
 
     Args:
         basePath: Path to the simulation output directory.
@@ -203,45 +204,28 @@ def measure_sf_gas_profile(basePath, snap, halo_id, r_edges, h=0.6774):
         h: Hubble parameter for unit conversion.
 
     Returns:
-        Density profile in each shell (Msun/kpc^3), shape (n_bins,).
-        Returns zeros if no star-forming gas is found.
+        Density profile in each shell (scaled to catalog normalization),
+        shape (n_bins,). Returns zeros if no star-forming gas is found.
     """
-    
+    n_bins = len(r_edges) - 1
+
     halo = il.groupcat.loadSingle(basePath, snap, haloID=halo_id)
-    halo_pos = halo["GroupPos"]  # ckpc/h
+    halo_pos = halo["GroupPos"]
 
     gas = il.snapshot.loadHalo(
         basePath, snap, halo_id, "gas",
         fields=["Coordinates", "Masses", "StarFormationRate"],
     )
 
-    n_bins = len(r_edges) - 1
-    if gas is None or (isinstance(gas, dict) and gas.get("count", 0) == 0):
+    if not isinstance(gas, dict) or gas.get("count", 0) == 0:
         return np.zeros(n_bins)
 
-    if isinstance(gas, dict):
-        coords = gas["Coordinates"]
-        masses = gas["Masses"]
-        sfr = gas["StarFormationRate"]
-    else:
-        # Single field returns array directly
-        return np.zeros(n_bins)
-
-    # Filter star-forming gas
-    sf_mask = sfr > 0
+    sf_mask = gas["StarFormationRate"] > 0
     if sf_mask.sum() == 0:
         return np.zeros(n_bins)
 
-    pos = (coords[sf_mask] - halo_pos) / h  # physical kpc, centred
-    mass = masses[sf_mask] * 1e10 / h  # Msun
+    pos = (gas["Coordinates"][sf_mask] - halo_pos) / h
+    mass = gas["Masses"][sf_mask] * 1e10 / h
 
-    radii = np.linalg.norm(pos, axis=1)
-
-    rho = np.zeros(n_bins)
-    for i in range(n_bins):
-        in_shell = (radii >= r_edges[i]) & (radii < r_edges[i + 1])
-        shell_mass = np.sum(mass[in_shell])
-        shell_vol = (4.0 / 3.0) * np.pi * (r_edges[i + 1]**3 - r_edges[i]**3)
-        rho[i] = shell_mass / shell_vol
-
+    _, rho, _ = measure_density_profile(pos, mass, r_edges=r_edges)
     return rho

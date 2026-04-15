@@ -4,6 +4,8 @@
 # Profile cache (large pickle files, regenerated from $WORK)
 data/profile_cache/
 
+testing_stuff/
+
 # macOS
 .DS_Store
 
