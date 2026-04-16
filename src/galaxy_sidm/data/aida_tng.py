@@ -15,11 +15,10 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False):
     Reads ``cat_halo_profiles_{snap}.hdf5`` which contains spherically averaged
     profiles for each FoF group, computed by the AIDA-TNG team.
 
-    The raw catalog stores radial bin edges as log10(r / (ckpc/h)) and profile
-    values proportional to density (up to a constant factor that differs
-    between FP and DMO catalogs).  This function converts radii to physical
-    kpc.  The density values are left as stored — the unknown constant does
-    not affect logarithmic slope measurements.
+    Per Despali (priv. comm.), bin 0 is a central sphere [0, r_edges[0]] and
+    bin i>=1 is a shell [r_edges[i-1], r_edges[i]]. Each bin is labeled by its
+    outer edge, so ``r_mid`` here is really ``r_edges[:-1]`` (the outer edges
+    of the 39 bins, dropping the unused last edge).
 
     Args:
         run_path: Path to the simulation run directory
@@ -33,9 +32,8 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False):
         Dict mapping FoF index (int) to a dict with keys:
 
         - ``r_edges``: bin edges in physical kpc, shape (40,)
-        - ``r_mid``: geometric-mean bin centres in physical kpc, shape (39,)
-        - ``prof_dm``: DM density profile (proportional, not calibrated),
-          shape (39,), or None
+        - ``r_outer``: outer edge of each bin in physical kpc, shape (39,)
+        - ``prof_dm``: DM density profile, shape (39,), or None
         - ``prof_gas``: gas density profile, shape (39,), or None
         - ``prof_stars``: stellar density profile, shape (39,), or None
     """
@@ -63,14 +61,14 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False):
 
             log_r_code = grp["r"][:]
             r_edges = 10**log_r_code / h
-            r_mid = np.sqrt(r_edges[:-1] * r_edges[1:])
+            r_outer = r_edges[:-1]
 
             prof = {
                 "r_edges": r_edges,
-                "r_mid": r_mid,
-                "prof_dm": grp["prof_dm"][:] if "prof_dm" in grp else None,
-                "prof_gas": grp["prof_gas"][:] if "prof_gas" in grp else None,
-                "prof_stars": grp["prof_stars"][:] if "prof_stars" in grp else None,
+                "r_outer": r_outer,
+                "prof_dm": grp["prof_dm"][:]*h**2 if "prof_dm" in grp else None,
+                "prof_gas": grp["prof_gas"][:]*h**2 if "prof_gas" in grp else None,
+                "prof_stars": grp["prof_stars"][:]*h**2 if "prof_stars" in grp else None,
             }
             profiles[fof_id] = prof
 

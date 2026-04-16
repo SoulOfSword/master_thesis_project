@@ -7,10 +7,8 @@ def measure_density_profile(positions, masses, r_min=None, r_max=None,
                             n_bins=40, r_edges=None):
     """Measure a spherically averaged density profile from particles.
 
-    Provide either ``r_edges`` (explicit bin edges) or ``r_min``/``r_max``/
-    ``n_bins`` to build log-spaced bins. Output is multiplied by the
-    empirical catalog normalization (3.74438603) so particle-derived
-    profiles match the AIDA-TNG pre-computed catalog values.
+    Bin 0 is a central sphere [0, r_edges[0]]. Bins 1+ are shells
+    [r_edges[i-1], r_edges[i]]. Returns n = len(r_edges)-1 bins.
 
     Args:
         positions: Particle positions relative to halo centre, shape (N, 3),
@@ -20,9 +18,8 @@ def measure_density_profile(positions, masses, r_min=None, r_max=None,
         r_edges: Explicit bin edges in kpc. Overrides r_min/r_max/n_bins.
 
     Returns:
-        (r_mid, rho, r_edges) — bin centres (geometric mean) in kpc,
-        density in Msun/kpc^3 scaled by the catalog normalization,
-        bin edges in kpc.
+        (r_label, rho, r_edges) — outer edge of each bin in kpc,
+        density in Msun/kpc^3, bin edges in kpc.
     """
     positions = np.asarray(positions)
     masses = np.asarray(masses)
@@ -32,17 +29,26 @@ def measure_density_profile(positions, masses, r_min=None, r_max=None,
         r_edges = np.logspace(np.log10(r_min), np.log10(r_max), n_bins + 1)
     else:
         r_edges = np.asarray(r_edges)
-    r_mid = np.sqrt(r_edges[:-1] * r_edges[1:])
 
     n = len(r_edges) - 1
     rho = np.zeros(n)
-    for i in range(n):
-        mask = (radii >= r_edges[i]) & (radii < r_edges[i + 1])
+
+    # Bin 0: sphere [0, r_edges[0]]
+    mask = radii < r_edges[0]
+    shell_mass = np.sum(masses[mask])
+    shell_vol = (4.0 / 3.0) * np.pi * r_edges[0]**3
+    rho[0] = shell_mass / shell_vol if shell_vol > 0 else 0.0
+
+    # Bins 1+: shells [r_edges[i-1], r_edges[i]]
+    for i in range(1, n):
+        mask = (radii >= r_edges[i-1]) & (radii < r_edges[i])
         shell_mass = np.sum(masses[mask])
-        shell_vol = (4.0 / 3.0) * np.pi * (r_edges[i + 1]**3 - r_edges[i]**3)
+        shell_vol = (4.0 / 3.0) * np.pi * (r_edges[i]**3 - r_edges[i-1]**3)
         rho[i] = shell_mass / shell_vol
 
-    return r_mid, rho, r_edges # Apply catalog normalization factor to match pre-computed profiles 
+    r_label = r_edges[:-1]
+
+    return r_label, rho, r_edges
 # which for some reason are off by this factor. No idea where it comes from, but it makes the profiles match the catalog values, 
 # so we apply it here for consistency.
 
@@ -74,21 +80,18 @@ def measure_inner_slope(r_mid, rho, r_inner, r_outer):
     return coeffs[0]
 
 
-def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
+def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
+                     min_ndm=1000, mstar_min=None):
     """Compute inner DM slope for all well-resolved halos across models.
-
-    Follows Despali+26 Fig. 5: gamma_DM is measured via a power-law fit in
-    log-log space over the radial range 1 kpc <= r <= max(0.03*R200c, 10 kpc).
 
     Args:
         catalogs: Dict of group catalogs per model. Each must have keys
-            'N_dm', 'M200c', 'R200c'.
-        model_profiles: Dict of pre-computed profile dicts per model, as
-            returned by ``load_precomputed_profiles``.
+            'N_dm', 'M200c', 'R200c', and optionally 'Mstar'.
+        model_profiles: Dict of pre-computed profile dicts per model.
         models: List of model names to process.
-        r_fit_min: Minimum reliable radius in kpc (not used in current
-            implementation — kept for API compatibility).
+        r_fit_min: Unused, kept for compatibility.
         min_ndm: Minimum number of DM particles.
+        mstar_min: If set, only include halos with Mstar >= this value.
 
     Returns:
         Dict per model with arrays: 'M200c', 'R200c', 'gamma_dm', 'halo_ids'.
@@ -99,6 +102,8 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
         profs = model_profiles[name]
 
         sel = (cat["N_dm"] >= min_ndm) & (cat["M200c"] > 0)
+        if mstar_min is not None and "Mstar" in cat:
+            sel &= cat["Mstar"] >= mstar_min
         halo_ids = np.where(sel)[0]
 
         gamma = np.full(len(halo_ids), np.nan)
@@ -106,7 +111,7 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min, min_ndm=1000):
             if hid not in profs:
                 continue
             prof = profs[hid]
-            r = prof["r_mid"]
+            r = prof["r_outer"]
             rho = prof["prof_dm"]
             if rho is None:
                 continue
@@ -156,9 +161,9 @@ def collect_profiles(profiles, halo_ids, r_common, components,
         if hid not in profiles:
             continue
         p = profiles[hid]
-        r_mid = p["r_mid"]
+        r = p["r_outer"]
 
-        rho_total = np.zeros(len(r_mid))
+        rho_total = np.zeros(len(r))
         skip = False
         for comp in components:
             if comp == "prof_sfgas":
@@ -180,7 +185,7 @@ def collect_profiles(profiles, halo_ids, r_common, components,
             continue
 
         log_rho_interp = np.interp(
-            log_r_common, np.log10(r_mid[valid]), np.log10(rho_total[valid]),
+            log_r_common, np.log10(r[valid]), np.log10(rho_total[valid]),
             left=np.nan, right=np.nan,
         )
         all_profiles.append(log_rho_interp)
