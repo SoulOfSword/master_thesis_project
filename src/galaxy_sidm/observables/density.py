@@ -234,3 +234,28 @@ def measure_sf_gas_profile(basePath, snap, halo_id, r_edges, h=0.6774):
 
     _, rho, _ = measure_density_profile(pos, mass, r_edges=r_edges)
     return rho
+
+
+def compute_halo_sfe(basePath, snap, halo_id, h=0.6774):
+    """Compute SFE = total SFR / total SF gas mass for a single halo.
+
+    Args:
+        basePath: Path to the simulation output directory.
+        snap: Snapshot number.
+        halo_id: FoF group index.
+        h: Hubble parameter.
+
+    Returns:
+        SFE in 1/yr, or np.nan if no star-forming gas is found.
+    """
+    gas = il.snapshot.loadHalo(basePath, snap, halo_id, "gas",
+        fields=["Masses", "StarFormationRate"])
+    if not isinstance(gas, dict) or gas.get("count", 0) == 0:
+        return np.nan
+    sfr = gas["StarFormationRate"]
+    sf = sfr > 0
+    if sf.sum() == 0:
+        return np.nan
+    total_sfr = sfr[sf].sum()
+    m_sfgas = gas["Masses"][sf].sum() * 1e10 / h
+    return total_sfr / m_sfgas
