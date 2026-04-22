@@ -99,10 +99,17 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
 
 
 def collect_profiles(profiles, halo_ids, r_common, components,
-                     sf_gas_cache=None):
-    """Interpolate and sum profile components onto a common radial grid."""
+                     sf_gas_cache=None, cold_gas_cache=None):
+    """Interpolate and sum profile components onto a common radial grid.
+
+    Components `prof_sfgas` and `prof_coldgas` pull from the respective
+    external caches; all other component keys are read from each halo's
+    profile dict.
+    """
     log_r_common = np.log10(r_common)
     all_profiles = []
+
+    ext_caches = {"prof_sfgas": sf_gas_cache, "prof_coldgas": cold_gas_cache}
 
     for hid in halo_ids:
         if hid not in profiles:
@@ -113,11 +120,12 @@ def collect_profiles(profiles, halo_ids, r_common, components,
         rho_total = np.zeros(len(r))
         skip = False
         for comp in components:
-            if comp == "prof_sfgas":
-                if sf_gas_cache is None or hid not in sf_gas_cache:
+            if comp in ext_caches:
+                cache = ext_caches[comp]
+                if cache is None or hid not in cache:
                     skip = True
                     break
-                rho_total += sf_gas_cache[hid]
+                rho_total += cache[hid]
             else:
                 rho_k = p[comp]
                 if rho_k is None:
@@ -272,6 +280,15 @@ def measure_cold_gas_profile(basePath, snap, halo_id, r_edges,
 
     _, rho, _ = measure_density_profile(rad_kpc, m_cold[keep], r_edges)
     return rho
+
+
+def compute_halo_total_sfr(basePath, snap, halo_id):
+    """Total SFR (Msun/yr) summed over all gas in a halo's FoF group."""
+    gas = il.snapshot.loadHalo(basePath, snap, halo_id, "gas",
+                               fields=["Masses", "StarFormationRate"])
+    if not isinstance(gas, dict) or gas.get("count", 0) == 0:
+        return np.nan
+    return gas["StarFormationRate"].sum()
 
 
 def compute_halo_sfe(basePath, snap, halo_id, h=0.6774):
