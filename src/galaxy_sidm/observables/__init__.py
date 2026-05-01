@@ -23,6 +23,7 @@ from .density import (
     measure_cold_gas_profile,
     compute_halo_sfe,
     compute_halo_total_sfr,
+    measure_subhalo_cold_gas_all,
 )
 from .scaling import (
     ScalingRelationFit,

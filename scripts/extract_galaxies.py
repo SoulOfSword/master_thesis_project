@@ -1,267 +1,145 @@
-"""Extract individual galaxy HDF5 files from TNG snapshots for MORDOR.
+"""Extract per-galaxy HDF5 files for AIDA-TNG centrals.
 
-Writes one Gadget-format HDF5 file per subhalo, containing all particle types
-(gas, DM, stars, BH) belonging to that subhalo. The output files are readable
-by pynbody and compatible with MORDOR's morphological decomposition pipeline.
+For one DM model + snapshot, builds the central-subhalo catalog, filters
+by stellar particle count, and writes one Gadget-format HDF5 file per
+qualifying central to `<out_root>/<model>/Gal_<subhalo_id>.hdf5`.
+
+The HDF5s are inputs to MORDOR (via `scripts/run_mordor.py`).
+
+Parallel via ProcessPoolExecutor with simple-arg workers (no temet sim
+pickling). Idempotent: skips already-extracted files unless --overwrite.
 
 Usage:
-    python scripts/extract_galaxies.py --basepath data/TNG50-4/output --snap 99 \
-        --outdir data/TNG50-4/galaxies --min-stars 10000
-
-    # Or specify subhalo IDs directly:
-    python scripts/extract_galaxies.py --basepath data/TNG50-4/output --snap 99 \
-        --outdir data/TNG50-4/galaxies --subhalo-ids 0 308 503
+    python scripts/extract_galaxies.py --model CDM --snap 67
+    python scripts/extract_galaxies.py --model SIDM1 --snap 99 \
+        --n-workers 16 --n-star-min 1e4
 """
 
 import argparse
 import os
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import h5py
-import illustris_python as il
 import numpy as np
+from tqdm import tqdm
+
+import temet
+from galaxy_sidm.data.aida_tng import (
+    build_central_subhalo_catalog, qualifying_central_ids,
+)
+from galaxy_sidm.morphology import extract_galaxy_hdf5
 
 
-# Particle types to extract and their TNG field names.
-# These are the fields MORDOR/pynbody need at minimum.
-PARTICLE_FIELDS = {
-    "gas": {
-        "type_idx": 0,
-        "fields": [
-            "Coordinates", "Velocities", "Masses", "ParticleIDs",
-            "Potential", "Density", "InternalEnergy",
-        ],
-    },
-    "dm": {
-        "type_idx": 1,
-        "fields": [
-            "Coordinates", "Velocities", "ParticleIDs", "Potential",
-        ],
-    },
-    "stars": {
-        "type_idx": 4,
-        "fields": [
-            "Coordinates", "Velocities", "Masses", "ParticleIDs",
-            "Potential", "GFM_StellarFormationTime", "GFM_Metallicity",
-        ],
-    },
-    "bh": {
-        "type_idx": 5,
-        "fields": [
-            "Coordinates", "Velocities", "Masses", "ParticleIDs",
-            "Potential",
-        ],
-    },
-}
+DEFAULT_OUT_ROOT = Path(os.environ.get(
+    "SCRATCH", "/leonardo_scratch/large/userexternal/acosta01"
+)) / "master_thesis_project" / "data" / "mordor_galaxies"
 
 
-def read_snapshot_metadata(basepath, snap):
-    """Read the header and per-field unit attributes from the first snapshot chunk.
-
-    Args:
-        basepath: Path to the TNG output directory.
-        snap: Snapshot number.
-
-    Returns:
-        Tuple of (header_dict, field_attrs_dict). field_attrs_dict maps
-        'PartTypeX/FieldName' to a dict of HDF5 dataset attributes (used by
-        pynbody for unit inference).
-    """
-    snap_dir = Path(basepath) / f"snapdir_{snap:03d}"
-    first_chunk = sorted(snap_dir.glob(f"snap_{snap:03d}.*.hdf5"))[0]
-    field_attrs = {}
-    with h5py.File(first_chunk, "r") as f:
-        header = dict(f["Header"].attrs)
-        for grp_name in f:
-            if not grp_name.startswith("PartType"):
-                continue
-            for ds_name in f[grp_name]:
-                ds = f[grp_name][ds_name]
-                if ds.attrs:
-                    field_attrs[f"{grp_name}/{ds_name}"] = dict(ds.attrs)
-    return header, field_attrs
-
-
-def load_subhalo_particles(basepath, snap, sub_id):
-    """Load all particle data for a subhalo.
-
-    Args:
-        basepath: Path to the TNG output directory.
-        snap: Snapshot number.
-        sub_id: Subhalo index.
-
-    Returns:
-        Dict mapping particle type name to dict of field arrays, plus 'count'
-        per type. Returns None for types with zero particles.
-    """
-    particles = {}
-    for ptype_name, ptype_info in PARTICLE_FIELDS.items():
-        fields = ptype_info["fields"]
-        # Load with 2+ fields to ensure dict return from illustris_python
-        try:
-            data = il.snapshot.loadSubhalo(
-                basepath, snap, sub_id, ptype_name, fields=fields,
-            )
-        except Exception:
-            data = {"count": 0}
-
-        if isinstance(data, np.ndarray):
-            # Single-field fallback: illustris_python returns raw array
-            data = {fields[0]: data, "count": len(data)}
-
-        if data["count"] > 0:
-            particles[ptype_name] = data
-        else:
-            particles[ptype_name] = None
-
-    return particles
-
-
-def write_galaxy_hdf5(filepath, particles, header, field_attrs, sub_id,
-                      dm_particle_mass):
-    """Write a single-galaxy Gadget-format HDF5 file readable by pynbody.
-
-    Args:
-        filepath: Output file path.
-        particles: Dict from load_subhalo_particles.
-        header: Original snapshot header dict.
-        field_attrs: Per-field HDF5 attributes from the original snapshot,
-            used by pynbody for unit inference.
-        sub_id: Subhalo ID (stored in header for reference).
-        dm_particle_mass: DM particle mass from the MassTable.
-    """
-    num_part = np.zeros(6, dtype=np.int64)
-    for ptype_name, ptype_info in PARTICLE_FIELDS.items():
-        if particles[ptype_name] is not None:
-            num_part[ptype_info["type_idx"]] = particles[ptype_name]["count"]
-
-    with h5py.File(filepath, "w") as f:
-        # Write header matching Gadget HDF5 conventions
-        hdr = f.create_group("Header")
-        hdr.attrs["NumPart_ThisFile"] = num_part.astype(np.int32)
-        hdr.attrs["NumPart_Total"] = num_part.astype(np.uint32)
-        hdr.attrs["NumPart_Total_HighWord"] = np.zeros(6, dtype=np.uint32)
-        hdr.attrs["NumFilesPerSnapshot"] = 1
-
-        # Copy cosmological parameters from the original snapshot
-        for key in [
-            "BoxSize", "HubbleParam", "Omega0", "OmegaBaryon",
-            "OmegaLambda", "Redshift", "Time",
-            "Flag_Cooling", "Flag_DoublePrecision", "Flag_Feedback",
-            "Flag_Metals", "Flag_Sfr", "Flag_StellarAge",
-            "UnitLength_in_cm", "UnitMass_in_g", "UnitVelocity_in_cm_per_s",
-        ]:
-            if key in header:
-                hdr.attrs[key] = header[key]
-
-        # MassTable: DM mass is fixed, others vary per-particle
-        mass_table = np.zeros(6, dtype=np.float64)
-        mass_table[1] = dm_particle_mass
-        hdr.attrs["MassTable"] = mass_table
-
-        # Store subhalo ID for provenance
-        hdr.attrs["SubhaloID"] = sub_id
-
-        # Write particle data
-        for ptype_name, ptype_info in PARTICLE_FIELDS.items():
-            if particles[ptype_name] is None:
-                continue
-
-            type_idx = ptype_info["type_idx"]
-            grp = f.create_group(f"PartType{type_idx}")
-
-            for field in ptype_info["fields"]:
-                if field in particles[ptype_name]:
-                    ds = grp.create_dataset(
-                        field, data=particles[ptype_name][field],
-                    )
-                    # Copy unit attributes so pynbody can infer units
-                    attr_key = f"PartType{type_idx}/{field}"
-                    if attr_key in field_attrs:
-                        for ak, av in field_attrs[attr_key].items():
-                            ds.attrs[ak] = av
-
-
-def extract_galaxies(basepath, snap, outdir, subhalo_ids):
-    """Extract individual galaxy files for a list of subhalos.
-
-    Args:
-        basepath: Path to the TNG output directory.
-        snap: Snapshot number.
-        outdir: Output directory for galaxy files.
-        subhalo_ids: Array of subhalo indices to extract.
-    """
-    os.makedirs(outdir, exist_ok=True)
-    header, field_attrs = read_snapshot_metadata(basepath, snap)
-    dm_mass = header["MassTable"][1]
-
-    print(f"Extracting {len(subhalo_ids)} galaxies from {basepath}, snap {snap}")
-    print(f"Output: {outdir}/Gal_XXXXXX.hdf5\n")
-
-    for i, sub_id in enumerate(subhalo_ids):
-        filename = f"Gal_{sub_id:06d}.hdf5"
-        filepath = os.path.join(outdir, filename)
-
-        particles = load_subhalo_particles(basepath, snap, sub_id)
-
-        n_stars = (
-            particles["stars"]["count"] if particles["stars"] is not None else 0
+def _worker(args):
+    base_path, snap, sub_id, out_path, h, soft, overwrite = args
+    try:
+        extract_galaxy_hdf5(
+            base_path=base_path, snap=snap, subhalo_id=sub_id,
+            out_path=out_path, h=h, soft_phys_kpc=soft, overwrite=overwrite,
         )
+        return sub_id, True, ""
+    except Exception as e:
+        return sub_id, False, repr(e)
 
-        write_galaxy_hdf5(filepath, particles, header, field_attrs, sub_id,
-                          dm_mass)
 
-        print(
-            f"  [{i+1}/{len(subhalo_ids)}] {filename}  "
-            f"(N_star={n_stars:,}, "
-            f"N_dm={particles['dm']['count'] if particles['dm'] else 0:,}, "
-            f"N_gas={particles['gas']['count'] if particles['gas'] else 0:,})"
-        )
+def expected_paths(out_root, model, sub_ids):
+    out_dir = Path(out_root) / model
+    return [out_dir / f"Gal_{int(s):06d}.hdf5" for s in sub_ids]
 
-    print(f"\nDone. {len(subhalo_ids)} files written to {outdir}/")
+
+def missing_subhalo_ids(out_root, model, sub_ids):
+    """Subset of sub_ids whose Gal_<id>.hdf5 is not yet on disk."""
+    out_dir = Path(out_root) / model
+    return [int(s) for s in sub_ids
+            if not (out_dir / f"Gal_{int(s):06d}.hdf5").exists()]
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract individual galaxy HDF5 files from TNG snapshots.",
+        description="Extract per-galaxy HDF5 files for AIDA-TNG centrals.",
     )
-    parser.add_argument(
-        "--basepath", required=True,
-        help="Path to TNG output directory (e.g. data/TNG50-4/output)",
-    )
-    parser.add_argument("--snap", type=int, required=True, help="Snapshot number")
-    parser.add_argument(
-        "--outdir", required=True,
-        help="Output directory for galaxy files",
-    )
-
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--subhalo-ids", type=int, nargs="+",
-        help="Specific subhalo IDs to extract",
-    )
-    group.add_argument(
-        "--min-stars", type=int,
-        help="Extract all flagged subhalos with at least this many star particles",
-    )
-
+    parser.add_argument("--model", required=True,
+                        choices=["CDM", "SIDM1", "vSIDM", "WDM3", "WDM5"])
+    parser.add_argument("--snap", type=int, required=True)
+    parser.add_argument("--res", type=int, default=1080,
+                        help="AIDA resolution (default 1080)")
+    parser.add_argument("--n-star-min", type=float, default=1e4,
+                        help="Min subhalo stellar particle count (default 1e4)")
+    parser.add_argument("--out-root", type=Path, default=DEFAULT_OUT_ROOT,
+                        help=f"Output root (default: {DEFAULT_OUT_ROOT})")
+    parser.add_argument("--n-workers", type=int, default=16)
+    parser.add_argument("--soft-phys-kpc", type=float, default=0.57,
+                        help="Plummer-equivalent softening (AIDA 50/A: 0.57)")
+    parser.add_argument("-h-cosmo", "--h-cosmo", type=float, default=0.6774,
+                        help="Hubble parameter h (default 0.6774)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Re-extract even if output exists")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Process only the first N qualifying subhalos")
     args = parser.parse_args()
 
-    if args.subhalo_ids is not None:
-        subhalo_ids = np.array(args.subhalo_ids)
-    else:
-        subs = il.groupcat.loadSubhalos(
-            args.basepath, args.snap,
-            fields=["SubhaloLenType", "SubhaloFlag"],
-        )
-        n_star = subs["SubhaloLenType"][:, 4]
-        flag = subs["SubhaloFlag"]
-        mask = flag & (n_star >= args.min_stars)
-        subhalo_ids = np.where(mask)[0]
-        print(f"Found {len(subhalo_ids)} subhalos with N_star >= {args.min_stars}")
+    sim = temet.sim(run="aida", variant=args.model,
+                    res=args.res, snap=args.snap)
+    cat = build_central_subhalo_catalog(sim)
+    sub_ids = qualifying_central_ids(cat, n_star_min=args.n_star_min)
+    if args.limit is not None:
+        sub_ids = sub_ids[:args.limit]
+    if len(sub_ids) == 0:
+        print(f"No centrals with N_star >= {args.n_star_min:.0f}; nothing to do.")
+        return 0
 
-    extract_galaxies(args.basepath, args.snap, args.outdir, subhalo_ids)
+    out_dir = Path(args.out_root) / args.model
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.overwrite:
+        todo = list(sub_ids)
+    else:
+        todo = missing_subhalo_ids(args.out_root, args.model, sub_ids)
+    if not todo:
+        print(f"All {len(sub_ids)} HDF5s already on disk under {out_dir}/")
+        return 0
+
+    print(f"{args.model} snap {args.snap} z={cat['redshift']:.3f}")
+    print(f"qualifying centrals: {len(sub_ids)}  to extract: {len(todo)}  "
+          f"workers: {args.n_workers}  out: {out_dir}/")
+
+    tasks = [
+        (cat["basePath"], int(cat["snap"]), int(s),
+         out_dir / f"Gal_{int(s):06d}.hdf5",
+         float(args.h_cosmo), float(args.soft_phys_kpc), args.overwrite)
+        for s in todo
+    ]
+
+    t0 = time.time()
+    n_ok = 0
+    failures = []
+    with ProcessPoolExecutor(max_workers=args.n_workers) as pool:
+        for sid, ok, err in tqdm(pool.map(_worker, tasks),
+                                  total=len(tasks),
+                                  desc=f"extract {args.model}",
+                                  unit="gal"):
+            if ok:
+                n_ok += 1
+            else:
+                failures.append((sid, err))
+
+    dt = time.time() - t0
+    print(f"\nDone in {dt/60:.1f} min  "
+          f"({n_ok}/{len(tasks)} ok, {len(failures)} failed)")
+    if failures:
+        print("First 10 failures:")
+        for sid, err in failures[:10]:
+            print(f"  subhalo {sid}: {err}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

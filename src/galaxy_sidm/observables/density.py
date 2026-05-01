@@ -291,6 +291,67 @@ def compute_halo_total_sfr(basePath, snap, halo_id):
     return gas["StarFormationRate"].sum()
 
 
+def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
+                                 T_thresh_high=10**4.5, T_thresh_low=1e4,
+                                 T_cold_phase=1000.0, sim=None):
+    """Total cold-gas mass in a subhalo for four definitions, single read.
+
+    Args:
+        basePath: Simulation output path.
+        snap: Snapshot number.
+        subhalo_id: Subhalo index (use central from GroupFirstSub).
+        h: Hubble parameter h.
+        T_thresh_high: Upper temperature cut for the 10^4.5 K and SH03
+            non-SF branches, in K.
+        T_thresh_low: Lower temperature cut for the 10^4 K branch, in K.
+        T_cold_phase: Substituted T (K) for SF cells when computing T_eff
+            (mimics temet's `temp_sfcold`).
+        sim: temet sim instance. Required for the 'sh03' definition; if
+            None, 'sh03' falls back to giving SF cells full mass.
+
+    Returns:
+        Dict with keys 'SFR>0', 'T<1e4', 'T<10^4.5', 'sh03' — each the
+        total cold-gas mass in Msun. Zeros if the subhalo has no gas.
+    """
+    fields = ["Masses", "InternalEnergy", "ElectronAbundance",
+              "StarFormationRate", "Density", "GFM_Metals"]
+    gas = il.snapshot.loadSubhalo(basePath, snap, subhalo_id, "gas",
+                                  fields=fields)
+    out = {"SFR>0": 0.0, "T<1e4": 0.0, "T<10^4.5": 0.0, "sh03": 0.0}
+    if not isinstance(gas, dict) or gas.get("count", 0) == 0:
+        return out
+
+    masses_msun = gas["Masses"] * 1e10 / h
+    sfr = gas["StarFormationRate"]
+    is_sf = sfr > 0
+
+    m_p = 1.672622e-24
+    k_B = 1.380650e-16
+    X_H = 0.76
+    gamma_eos = 5.0 / 3.0
+    mu = 4.0 / (1.0 + 3.0*X_H + 4.0*X_H*gas["ElectronAbundance"])
+    T_normal = (gamma_eos - 1.0) * mu * m_p * (gas["InternalEnergy"] * 1e10) / k_B
+    T_eff = np.where(is_sf, T_cold_phase, T_normal)
+
+    out["SFR>0"]    = float(masses_msun[is_sf].sum())
+    out["T<1e4"]    = float(masses_msun[T_eff < T_thresh_low].sum())
+    out["T<10^4.5"] = float(masses_msun[T_eff < T_thresh_high].sum())
+
+    w = np.zeros(len(masses_msun))
+    w[(~is_sf) & (T_normal < T_thresh_high)] = 1.0
+    if is_sf.any():
+        if sim is not None:
+            X_H_cell = gas["GFM_Metals"][:, 0]
+            nH = sim.units.codeDensToPhys(gas["Density"], cgs=True, numDens=True) * X_H_cell
+            coldfrac, _ = sim.units.densToSH03TwoPhase(nH[is_sf], sfr[is_sf])
+            w[is_sf] = coldfrac
+        else:
+            w[is_sf] = 1.0
+    out["sh03"] = float((masses_msun * w).sum())
+
+    return out
+
+
 def compute_halo_sfe(basePath, snap, halo_id, h=0.6774):
     """SFE = total SFR / total SF gas mass for a halo."""
     gas = il.snapshot.loadHalo(basePath, snap, halo_id, "gas",

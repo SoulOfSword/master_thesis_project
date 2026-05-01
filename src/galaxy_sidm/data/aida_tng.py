@@ -3,8 +3,71 @@
 from pathlib import Path
 import pickle
 import h5py
+import numpy as np
 
 CACHE_DIR = Path.home() / "master_thesis_project" / "data" / "profile_cache"
+
+
+def build_central_subhalo_catalog(sim):
+    """Build a per-subhalo catalog tagged with parent-FoF properties.
+
+    For each subhalo, attaches the parent FoF group's M200c and R200c
+    (NaN if no parent). Adds an `IsCentral` flag for subhalos that are
+    `GroupFirstSub` of their parent. Particle counts and masses are
+    SUBFIND-bound subhalo quantities — what we want to feed to MORDOR.
+
+    Args:
+        sim: A `temet` sim object (or anything with `.groupCat`,
+            `.subhalos`, `.units`, `.simPath`, `.redshift` attributes).
+
+    Returns:
+        Dict with arrays of length n_subhalos:
+            'M200c' (Msun, parent FoF), 'R200c' (kpc, parent FoF),
+            'N_dm', 'N_star' (subhalo SubhaloLenType),
+            'Mstar' (Msun, subhalo SubhaloMassType[:, 4]),
+            'IsCentral' (bool), 'GroupNr' (parent FoF index).
+        Plus scalar 'basePath' (Path), 'snap' (int), 'redshift' (float).
+    """
+    gc = sim.groupCat(fieldsHalos=["Group_M_Crit200", "Group_R_Crit200",
+                                    "GroupFirstSub"])
+    sub_lentype  = sim.subhalos("SubhaloLenType")
+    sub_masstype = sim.subhalos("SubhaloMassType")
+    sub_grnr     = sim.subhalos("SubhaloGrNr")
+    n_sub = len(sub_grnr)
+
+    fof_M200c = sim.units.codeMassToMsun(gc["Group_M_Crit200"])
+    fof_R200c = sim.units.codeLengthToKpc(gc["Group_R_Crit200"])
+    first_sub = gc["GroupFirstSub"]
+
+    M200c_per_sub = np.full(n_sub, np.nan)
+    R200c_per_sub = np.full(n_sub, np.nan)
+    valid_grnr = (sub_grnr >= 0) & (sub_grnr < len(fof_M200c))
+    M200c_per_sub[valid_grnr] = fof_M200c[sub_grnr[valid_grnr]]
+    R200c_per_sub[valid_grnr] = fof_R200c[sub_grnr[valid_grnr]]
+
+    sub_idx = np.arange(n_sub)
+    is_central = np.zeros(n_sub, dtype=bool)
+    grp_valid = (sub_grnr >= 0) & (sub_grnr < len(first_sub))
+    is_central[grp_valid] = first_sub[sub_grnr[grp_valid]] == sub_idx[grp_valid]
+
+    return {
+        "M200c":     M200c_per_sub,
+        "R200c":     R200c_per_sub,
+        "N_dm":      sub_lentype[:, 1],
+        "N_star":    sub_lentype[:, 4],
+        "Mstar":     sim.units.codeMassToMsun(sub_masstype[:, 4]),
+        "IsCentral": is_central,
+        "GroupNr":   sub_grnr,
+        "basePath":  sim.simPath,
+        "snap":      int(sim.snap),
+        "redshift":  float(sim.redshift),
+    }
+
+
+def qualifying_central_ids(catalog, n_star_min=10000):
+    """Return the central-subhalo IDs that pass an N_star particle cut."""
+    return np.where(catalog["IsCentral"]
+                    & (catalog["N_star"] >= n_star_min))[0]
 
 
 def _read_snap_redshift(run_path, snap):
@@ -22,6 +85,12 @@ def _read_snap_redshift(run_path, snap):
     with h5py.File(candidates[0], "r") as f:
         z = float(f["Header"].attrs["Redshift"])
     return max(z, 0.0)
+
+
+def get_snap_scale_factor(run_path, snap):
+    """Return (redshift, scale_factor) for a snapshot from its header."""
+    z = _read_snap_redshift(run_path, snap)
+    return z, 1.0 / (1.0 + z)
 
 
 def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,

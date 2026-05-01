@@ -15,11 +15,13 @@ dependencies = [
     "jaxlib",
     "emcee",
     "pandas",
+    "pynbody",
     "loky",
     "h5py",          # HDF5 for simulation data
     "pyyaml",        # Config file loading
     "requests",      # API access for TNG
     "astropy",       # Units, cosmology, coordinates
+    "tqdm",          # Progress bars (scripts/run_mordor.py orchestrator)
 ]
 
 [project.optional-dependencies]
