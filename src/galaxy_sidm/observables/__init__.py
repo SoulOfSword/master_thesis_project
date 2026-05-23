@@ -17,6 +17,7 @@ from .density import (
     measure_density_profile,
     measure_inner_slope,
     compute_gamma_dm,
+    compute_r_core_dm,
     collect_profiles,
     measure_gas_density_profile,
     measure_sf_gas_profile,

@@ -10,6 +10,7 @@ from .profiles import (
     concentration_duffy08,
     nfw_scale_density,
     fit_nfw,
+    fit_cored_nfw,
 )
 from .sidm import (
     cross_section_constant,

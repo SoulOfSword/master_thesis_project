@@ -11,13 +11,13 @@ def measure_density_profile(radii, masses, r_edges):
     [r_edges[i-1], r_edges[i]].
 
     Args:
-        radii: Particle radii from halo centre, shape (N,), physical kpc.
+        radii: Particle radii from halo centre, shape (N,), comoving ckpc.
         masses: Particle masses, shape (N,), Msun.
-        r_edges: Bin edges, physical kpc.
+        r_edges: Bin edges, comoving ckpc.
 
     Returns:
-        (r_label, rho, r_edges) — outer edge per bin in kpc,
-        density in Msun/kpc^3, bin edges in kpc.
+        (r_label, rho, r_edges) — outer edge per bin in ckpc,
+        density in Msun/ckpc^3, bin edges in ckpc.
     """
     radii = np.asarray(radii)
     masses = np.asarray(masses)
@@ -42,9 +42,9 @@ def measure_inner_slope(r_mid, rho, r_inner, r_outer):
     """Logarithmic slope d(log rho)/d(log r) over a radial range.
 
     Args:
-        r_mid: Bin outer edges in kpc, shape (n_bins,).
-        rho: Density in each bin, Msun/kpc^3.
-        r_inner, r_outer: Fit range in kpc.
+        r_mid: Bin outer edges in ckpc, shape (n_bins,).
+        rho: Density in each bin, Msun/ckpc^3.
+        r_inner, r_outer: Fit range in ckpc.
 
     Returns:
         Slope, or NaN if fewer than 2 bins fall in the range.
@@ -55,9 +55,142 @@ def measure_inner_slope(r_mid, rho, r_inner, r_outer):
     return np.polyfit(np.log10(r_mid[mask]), np.log10(rho[mask]), 1)[0]
 
 
-def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
-                     min_ndm=1000, mstar_min=None):
-    """Inner DM slope for all well-resolved halos across models."""
+def compute_r_core_dm(catalogs, model_profiles, models,
+                      min_ndm=1000, mstar_min=None,
+                      fit_min=1.0, fit_max_factor=1.0):
+    """Per-halo cored-NFW fit; returns r_core, r_s, rho_s arrays per model.
+
+    For each qualifying halo, runs a 3-parameter fit of the cored NFW
+    profile (NFW * tanh(r/r_core)) to its DM density profile over
+    [fit_min, fit_max_factor * R200c] in comoving ckpc. r_core close to
+    zero indicates a cuspy NFW-like halo; large r_core indicates a core.
+
+    Args:
+        catalogs: {model: catalog_dict} with 'N_dm', 'M200c', 'R200c',
+            optionally 'Mstar'.
+        model_profiles: {model: {halo_id: profile_dict}} with each
+            profile having 'r_outer' and 'prof_dm'.
+        models: list of model names to process.
+        min_ndm: minimum DM particle count per halo.
+        mstar_min: if provided and 'Mstar' in catalog, drop halos below.
+        fit_min: inner radius for the fit (ckpc, default 3.0).
+        fit_max_factor: outer radius = factor * R200c (default 1.0).
+
+    Returns:
+        Dict per model with arrays 'M200c', 'R200c', 'r_core', 'r_s',
+        'rho_s', 'chi2', 'halo_ids' (only halos with successful fit).
+    """
+    from ..models.profiles import fit_nfw, fit_cored_nfw
+
+    results = {}
+    for name in models:
+        cat = catalogs[name]
+        profs = model_profiles[name]
+
+        sel = (cat["N_dm"] >= min_ndm) & (cat["M200c"] > 0)
+        if mstar_min is not None and "Mstar" in cat:
+            sel &= cat["Mstar"] >= mstar_min
+        halo_ids = np.where(sel)[0]
+
+        n = len(halo_ids)
+        r_core_arr = np.full(n, np.nan)
+        r_s_arr    = np.full(n, np.nan)
+        rho_s_arr  = np.full(n, np.nan)
+        chi2_arr   = np.full(n, np.nan)
+        for i, hid in enumerate(halo_ids):
+            if hid not in profs:
+                continue
+            prof = profs[hid]
+            rho = prof["prof_dm"]
+            if rho is None:
+                continue
+            r = prof["r_outer"]
+            r200 = cat["R200c"][hid]
+
+            nfw0 = fit_nfw(r, rho, r_fit_min=fit_min,
+                           r_fit_max=fit_max_factor * r200)
+            seed = nfw0 if nfw0.get("success") else None
+
+            cfit = fit_cored_nfw(r, rho, r_fit_min=fit_min,
+                                  r_fit_max=fit_max_factor * r200,
+                                  p0_from_nfw=seed)
+            if not cfit.get("success"):
+                continue
+
+            r_core_arr[i] = cfit["r_core"]
+            r_s_arr[i]    = cfit["r_s"]
+            rho_s_arr[i]  = cfit["rho_s"]
+            chi2_arr[i]   = cfit["chi2"]
+
+        valid = np.isfinite(r_core_arr)
+        results[name] = {
+            "M200c":    cat["M200c"][halo_ids][valid],
+            "R200c":    cat["R200c"][halo_ids][valid],
+            "r_core":   r_core_arr[valid],
+            "r_s":      r_s_arr[valid],
+            "rho_s":    rho_s_arr[valid],
+            "chi2":     chi2_arr[valid],
+            "halo_ids": halo_ids[valid],
+        }
+        print(f"{name}: {valid.sum()}/{n} halos with successful cored-NFW fit")
+
+    return results
+
+
+def compute_gamma_dm(catalogs, model_profiles, models,
+                     r_inner=1.0,
+                     r_outer_kind="nfw_rs",
+                     r_outer_factor=None,
+                     r_outer_floor=10.0,
+                     min_ndm=1000, mstar_min=None,
+                     nfw_fit_min=5.0, nfw_fit_max_factor=1.0):
+    """Inner DM slope from per-halo log-log slope measurement.
+
+    Two ways to define the outer slope-fit radius, selected via
+    r_outer_kind:
+
+    'nfw_rs' (default):
+        Per-halo NFW fit to recover r_s, then r_outer = factor * r_s.
+        Default factor = 0.3 (NFW log-slope here is ~ -1.46 — close to
+        the asymptotic inner cusp without being unstable from too few
+        bins).
+
+    'r200c':
+        r_outer = max(factor * R200c, r_outer_floor). Default factor =
+        0.03 and floor = 10 ckpc — recovers the original outer-radius
+        criterion used before the NFW-r_s switch. NFW fit is skipped.
+
+    Inner slope is then measured as a log-log linear fit of rho(r) over
+    [r_inner, r_outer]. All radii in comoving ckpc.
+
+    Args:
+        catalogs: {model_name: catalog_dict} with 'N_dm', 'M200c',
+            'R200c', optionally 'Mstar'.
+        model_profiles: {model_name: {halo_id: profile_dict}}.
+        models: list of model names.
+        r_inner: inner radius for the slope fit (ckpc, default 1.0).
+        r_outer_kind: 'nfw_rs' or 'r200c'.
+        r_outer_factor: factor for the chosen kind. If None, uses 0.3
+            for 'nfw_rs' and 0.03 for 'r200c'.
+        r_outer_floor: floor on r_outer (ckpc). Only used when
+            r_outer_kind='r200c'.
+        min_ndm: minimum N_dm per halo (default 1000).
+        mstar_min: if provided and 'Mstar' in catalog, drop halos below.
+        nfw_fit_min: inner radius for the NFW fit when kind='nfw_rs'.
+        nfw_fit_max_factor: outer NFW-fit radius = factor * R200c.
+
+    Returns:
+        Dict per model with 'M200c', 'R200c', 'r_s', 'gamma_dm',
+        'halo_ids'. r_s is NaN when r_outer_kind='r200c'.
+    """
+    if r_outer_kind not in ("nfw_rs", "r200c"):
+        raise ValueError(f"r_outer_kind must be 'nfw_rs' or 'r200c', "
+                         f"got {r_outer_kind!r}")
+    if r_outer_factor is None:
+        r_outer_factor = 0.3 if r_outer_kind == "nfw_rs" else 0.03
+
+    from ..models.profiles import fit_nfw
+
     results = {}
     for name in models:
         cat = catalogs[name]
@@ -69,6 +202,7 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
         halo_ids = np.where(sel)[0]
 
         gamma = np.full(len(halo_ids), np.nan)
+        r_s_arr = np.full(len(halo_ids), np.nan)
         for i, hid in enumerate(halo_ids):
             if hid not in profs:
                 continue
@@ -79,8 +213,17 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
             r = prof["r_outer"]
             r200 = cat["R200c"][hid]
 
-            r_inner = 1.0
-            r_outer = max(0.03 * r200, 10.0)
+            if r_outer_kind == "nfw_rs":
+                fit = fit_nfw(r, rho, r_fit_min=nfw_fit_min,
+                              r_fit_max=nfw_fit_max_factor * r200)
+                if not fit.get("success") or not np.isfinite(fit.get("r_s", np.nan)):
+                    continue
+                r_s = float(fit["r_s"])
+                r_outer = r_outer_factor * r_s
+                r_s_arr[i] = r_s
+            else:  # r200c
+                r_outer = max(r_outer_factor * r200, r_outer_floor)
+
             if r_outer <= r_inner:
                 continue
 
@@ -88,8 +231,9 @@ def compute_gamma_dm(catalogs, model_profiles, models, r_fit_min=None,
 
         valid = ~np.isnan(gamma)
         results[name] = {
-            "M200c": cat["M200c"][halo_ids][valid],
-            "R200c": cat["R200c"][halo_ids][valid],
+            "M200c":   cat["M200c"][halo_ids][valid],
+            "R200c":   cat["R200c"][halo_ids][valid],
+            "r_s":     r_s_arr[valid],
             "gamma_dm": gamma[valid],
             "halo_ids": halo_ids[valid],
         }
@@ -158,14 +302,15 @@ def measure_gas_density_profile(basePath, snap, halo_id, r_edges,
         basePath: Path to simulation output directory.
         snap: Snapshot number.
         halo_id: FoF group index.
-        r_edges: Radial bin edges, physical kpc.
-        a: Scale factor = 1/(1+z). Default 1 (z=0).
+        r_edges: Radial bin edges, comoving ckpc.
+        a: Retained for backward-compat but unused; output is comoving.
         h: Hubble parameter.
-        box: Box size in ckpc/h. If None, read from snapshot header (slow).
+        box: Box size in code length units. If None, read from snapshot
+            header (slow).
         mask: Optional boolean array over gas cells.
 
     Returns:
-        Density per shell, Msun/kpc^3, shape (len(r_edges)-1,).
+        Density per shell, Msun/ckpc^3, shape (len(r_edges)-1,).
     """
     n_bins = len(r_edges) - 1
     gas = il.snapshot.loadHalo(basePath, snap, halo_id, "gas",
@@ -181,22 +326,26 @@ def measure_gas_density_profile(basePath, snap, halo_id, r_edges,
 
     dx = gas["Coordinates"] - halo["GroupPos"]
     dx -= box * np.round(dx / box)
-    rad_kpc = np.linalg.norm(dx, axis=1) * a / h
+    rad_ckpc = np.linalg.norm(dx, axis=1) / h
     mass_msun = gas["Masses"] * 1e10 / h
 
     if mask is not None:
-        rad_kpc = rad_kpc[mask]
+        rad_ckpc = rad_ckpc[mask]
         mass_msun = mass_msun[mask]
-    if len(rad_kpc) == 0:
+    if len(rad_ckpc) == 0:
         return np.zeros(n_bins)
 
-    _, rho, _ = measure_density_profile(rad_kpc, mass_msun, r_edges)
+    _, rho, _ = measure_density_profile(rad_ckpc, mass_msun, r_edges)
     return rho
 
 
 def measure_sf_gas_profile(basePath, snap, halo_id, r_edges,
                            a=1.0, h=0.6774, box=None):
-    """SF gas density profile (SFR > 0 mask)."""
+    """SF gas density profile (SFR > 0 mask).
+
+    `a` is retained for backward-compat but unused; output is comoving
+    (radii in ckpc, density in Msun/ckpc^3).
+    """
     n_bins = len(r_edges) - 1
     gas = il.snapshot.loadHalo(basePath, snap, halo_id, "gas",
                                fields=["Coordinates", "Masses", "StarFormationRate"])
@@ -215,15 +364,15 @@ def measure_sf_gas_profile(basePath, snap, halo_id, r_edges,
 
     dx = gas["Coordinates"][sf] - halo["GroupPos"]
     dx -= box * np.round(dx / box)
-    rad_kpc = np.linalg.norm(dx, axis=1) * a / h
+    rad_ckpc = np.linalg.norm(dx, axis=1) / h
     mass_msun = gas["Masses"][sf] * 1e10 / h
 
-    _, rho, _ = measure_density_profile(rad_kpc, mass_msun, r_edges)
+    _, rho, _ = measure_density_profile(rad_ckpc, mass_msun, r_edges)
     return rho
 
 
 def measure_cold_gas_profile(basePath, snap, halo_id, r_edges,
-                             T_thresh=10**4.5, a=1.0, h=0.6774, box=None,
+                             T_thresh=1e4, a=1.0, h=0.6774, box=None,
                              sim=None):
     """Cold-gas density profile.
 
@@ -231,6 +380,9 @@ def measure_cold_gas_profile(basePath, snap, halo_id, r_edges,
     contribute `mass * coldfrac` when `sim` is given (SH03 two-phase via
     `sim.units.densToSH03TwoPhase`); otherwise SF cells contribute their
     full mass (~10% overcount relative to SH03).
+
+    `a` is retained for backward-compat but unused; radii are output in
+    comoving ckpc and densities in Msun/ckpc^3.
     """
     n_bins = len(r_edges) - 1
     fields = ["Coordinates", "Masses", "InternalEnergy",
@@ -256,8 +408,11 @@ def measure_cold_gas_profile(basePath, snap, halo_id, r_edges,
     w[(~is_sf) & (T < T_thresh)] = 1.0
     if is_sf.any():
         if sim is not None:
+            # nH stays physical: densToSH03TwoPhase is a sub-grid physics
+            # formula calibrated against physical hydrogen number density.
             X_H_cell = gas["GFM_Metals"][:, 0]
-            nH = sim.units.codeDensToPhys(gas["Density"], cgs=True, numDens=True) * X_H_cell
+            nH = sim.units.codeDensToPhys(
+                gas["Density"], cgs=True, numDens=True) * X_H_cell
             coldfrac, _ = sim.units.densToSH03TwoPhase(nH[is_sf], sfr[is_sf])
             w[is_sf] = coldfrac
         else:
@@ -276,9 +431,9 @@ def measure_cold_gas_profile(basePath, snap, halo_id, r_edges,
 
     dx = gas["Coordinates"][keep] - halo["GroupPos"]
     dx -= box * np.round(dx / box)
-    rad_kpc = np.linalg.norm(dx, axis=1) * a / h
+    rad_ckpc = np.linalg.norm(dx, axis=1) / h
 
-    _, rho, _ = measure_density_profile(rad_kpc, m_cold[keep], r_edges)
+    _, rho, _ = measure_density_profile(rad_ckpc, m_cold[keep], r_edges)
     return rho
 
 
@@ -341,8 +496,11 @@ def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
     w[(~is_sf) & (T_normal < T_thresh_high)] = 1.0
     if is_sf.any():
         if sim is not None:
+            # nH stays physical: densToSH03TwoPhase is a sub-grid physics
+            # formula calibrated against physical hydrogen number density.
             X_H_cell = gas["GFM_Metals"][:, 0]
-            nH = sim.units.codeDensToPhys(gas["Density"], cgs=True, numDens=True) * X_H_cell
+            nH = sim.units.codeDensToPhys(
+                gas["Density"], cgs=True, numDens=True) * X_H_cell
             coldfrac, _ = sim.units.densToSH03TwoPhase(nH[is_sf], sfr[is_sf])
             w[is_sf] = coldfrac
         else:

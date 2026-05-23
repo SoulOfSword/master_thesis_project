@@ -83,11 +83,17 @@ def main():
                         help="Re-extract even if output exists")
     parser.add_argument("--limit", type=int, default=None,
                         help="Process only the first N qualifying subhalos")
+    parser.add_argument("--base-path", type=Path, default=None,
+                        help="Override snapshot basePath (e.g. SCRATCH shadow "
+                             "tree when snapshot data is not in $WORK)")
     args = parser.parse_args()
 
     sim = temet.sim(run="aida", variant=args.model,
                     res=args.res, snap=args.snap)
     cat = build_central_subhalo_catalog(sim)
+    if args.base_path is not None:
+        cat["basePath"] = str(args.base_path).rstrip("/") + "/"
+        print(f"[extract_galaxies] basePath overridden -> {cat['basePath']}")
     sub_ids = qualifying_central_ids(cat, n_star_min=args.n_star_min)
     if args.limit is not None:
         sub_ids = sub_ids[:args.limit]

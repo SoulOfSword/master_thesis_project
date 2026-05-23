@@ -22,7 +22,7 @@ def build_central_subhalo_catalog(sim):
 
     Returns:
         Dict with arrays of length n_subhalos:
-            'M200c' (Msun, parent FoF), 'R200c' (kpc, parent FoF),
+            'M200c' (Msun, parent FoF), 'R200c' (ckpc, parent FoF),
             'N_dm', 'N_star' (subhalo SubhaloLenType),
             'Mstar' (Msun, subhalo SubhaloMassType[:, 4]),
             'IsCentral' (bool), 'GroupNr' (parent FoF index).
@@ -36,7 +36,7 @@ def build_central_subhalo_catalog(sim):
     n_sub = len(sub_grnr)
 
     fof_M200c = sim.units.codeMassToMsun(gc["Group_M_Crit200"])
-    fof_R200c = sim.units.codeLengthToKpc(gc["Group_R_Crit200"])
+    fof_R200c = sim.units.codeLengthToComovingKpc(gc["Group_R_Crit200"])
     first_sub = gc["GroupFirstSub"]
 
     M200c_per_sub = np.full(n_sub, np.nan)
@@ -97,9 +97,9 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
                               halo_ids=None, redshift=None):
     """Load pre-computed density profiles from the postprocessing catalog.
 
-    Returns profiles in physical units: radii in physical kpc,
-    densities in Msun/kpc^3. Bin 0 is a central sphere [0, r_edges[0]];
-    bin i>=1 is a shell [r_edges[i-1], r_edges[i]].
+    Returns profiles in comoving units with little-h removed: radii in
+    comoving ckpc, densities in Msun/ckpc^3. Bin 0 is a central sphere
+    [0, r_edges[0]]; bin i>=1 is a shell [r_edges[i-1], r_edges[i]].
 
     Args:
         run_path: Path to the simulation run directory.
@@ -107,8 +107,8 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
         h: Dimensionless Hubble parameter (default 0.6774).
         use_test: If True, load the ``_test`` variant of the catalog.
         halo_ids: If provided, only load profiles for these FoF IDs.
-        redshift: Snapshot redshift. If None, read from the snapshot header.
-            Pass ``sim.redshift`` from a temet sim object to skip the I/O.
+        redshift: Snapshot redshift. Retained for backward-compat but
+            unused; output is comoving with no scale-factor dependence.
 
     Returns:
         Dict mapping FoF index (int) to a dict with keys
@@ -123,17 +123,13 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
 
     run_name = run_path.name
     ids_tag = f"_n{len(halo_ids)}" if halo_ids is not None else ""
-    cache_name = f"{run_name}_profiles_{snap:03d}{suffix}{ids_tag}_phys.pkl"
+    cache_name = f"{run_name}_profiles_{snap:03d}{suffix}{ids_tag}_com.pkl"
     cache_path = CACHE_DIR / cache_name
     if cache_path.exists():
         with open(cache_path, "rb") as cf:
             return pickle.load(cf)
 
-    if redshift is None:
-        redshift = _read_snap_redshift(run_path, snap)
-    a = 1.0 / (1.0 + redshift)
     h2 = h**2
-    a3 = a**3
 
     profiles = {}
     with h5py.File(fpath, "r") as f:
@@ -149,15 +145,15 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
             grp = f[key]
 
             log_r_code = grp["r"][:]
-            r_edges = 10**log_r_code / h * a
+            r_edges = 10**log_r_code / h
             r_outer = r_edges[:-1]
 
             prof = {
                 "r_edges": r_edges,
                 "r_outer": r_outer,
-                "prof_dm":    grp["prof_dm"][:]    * h2 / a3 if "prof_dm"    in grp else None,
-                "prof_gas":   grp["prof_gas"][:]   * h2 / a3 if "prof_gas"   in grp else None,
-                "prof_stars": grp["prof_stars"][:] * h2 / a3 if "prof_stars" in grp else None,
+                "prof_dm":    grp["prof_dm"][:]    * h2 if "prof_dm"    in grp else None,
+                "prof_gas":   grp["prof_gas"][:]   * h2 if "prof_gas"   in grp else None,
+                "prof_stars": grp["prof_stars"][:] * h2 if "prof_stars" in grp else None,
             }
             profiles[fof_id] = prof
 

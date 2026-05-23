@@ -191,7 +191,7 @@ def worker_main(args):
 
 def maybe_extract(model: str, snap: int, res: int, n_star_min: float,
                   out_root: Path, paths: List[Path], n_workers: int,
-                  soft_phys_kpc: float):
+                  soft_phys_kpc: float, base_path: Path = None):
     """Invoke extract_galaxies.py if any expected HDF5 is missing."""
     missing = [p for p in paths if not p.exists()]
     if not missing:
@@ -206,6 +206,8 @@ def maybe_extract(model: str, snap: int, res: int, n_star_min: float,
         "--n-workers", str(n_workers),
         "--soft-phys-kpc", f"{soft_phys_kpc}",
     ]
+    if base_path is not None:
+        cmd += ["--base-path", str(base_path)]
     rc = subprocess.run(cmd).returncode
     if rc != 0:
         sys.exit(f"extract_galaxies.py failed with code {rc}")
@@ -238,7 +240,7 @@ def master_main(args):
 
     maybe_extract(args.model, args.snap, args.res, args.n_star_min,
                   args.out_root, paths, args.extract_workers,
-                  args.soft_phys_kpc)
+                  args.soft_phys_kpc, base_path=args.base_path)
 
     sizes = [estimate_resident_bytes(p, args.mem_factor) for p in paths]
     print(f"[run_mordor] HDF5 sizes: median={human_bytes(int(np.median([p.stat().st_size for p in paths])))}, "
@@ -280,7 +282,9 @@ def master_main(args):
         ]
         log_path = chunk_dir / f"chunk_{ch['id']:03d}.log"
         log_fp = open(log_path, "w")
-        proc = subprocess.Popen(cmd, stdout=log_fp, stderr=subprocess.STDOUT)
+        worker_env = os.environ.copy()
+        worker_env.update({'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1'})
+        proc = subprocess.Popen(cmd, stdout=log_fp, stderr=subprocess.STDOUT, env=worker_env)
         procs.append({"proc": proc, "log_fp": log_fp, "chunk": ch})
 
     total = planned_galaxy_count(plan)
@@ -375,6 +379,9 @@ def build_parser():
     p.add_argument("--mode", default="cosmo_sim",
                    help="MORDOR potential mode (default cosmo_sim)")
     p.add_argument("--soft-phys-kpc", type=float, default=0.57)
+    p.add_argument("--base-path", type=Path, default=None,
+                   help="Override snapshot basePath (passed through to "
+                        "extract_galaxies.py; for SCRATCH shadow trees)")
     p.add_argument("--resume", action="store_true",
                    help="Skip galaxies already in chunk outputs")
     return p
