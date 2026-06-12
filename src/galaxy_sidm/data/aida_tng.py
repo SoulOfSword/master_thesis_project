@@ -30,14 +30,14 @@ def build_central_subhalo_catalog(sim):
     """
     gc = sim.groupCat(fieldsHalos=["Group_M_Crit200", "Group_R_Crit200",
                                     "GroupFirstSub"])
-    sub_lentype  = sim.subhalos("SubhaloLenType")
-    sub_masstype = sim.subhalos("SubhaloMassType")
-    sub_grnr     = sim.subhalos("SubhaloGrNr")
-    n_sub = len(sub_grnr)
+    sub_lentype  = sim.subhalos("SubhaloLenType") # n_particles by type, subhalo
+    sub_masstype = sim.subhalos("SubhaloMassType") # mass by type, subhalo
+    sub_grnr     = sim.subhalos("SubhaloGrNr") # parent FoF index per subhalo
+    n_sub = len(sub_grnr) # should match len(sub_lentype) and len(sub_masstype)
 
     fof_M200c = sim.units.codeMassToMsun(gc["Group_M_Crit200"])
     fof_R200c = sim.units.codeLengthToComovingKpc(gc["Group_R_Crit200"])
-    first_sub = gc["GroupFirstSub"]
+    first_sub = gc["GroupFirstSub"] # index of central subhalo for each FoF, or -1 if no subhalos
 
     M200c_per_sub = np.full(n_sub, np.nan)
     R200c_per_sub = np.full(n_sub, np.nan)
@@ -70,6 +70,47 @@ def qualifying_central_ids(catalog, n_star_min=10000):
                     & (catalog["N_star"] >= n_star_min))[0]
 
 
+def match_fp_to_dmo_fof(sim_fp, sim_dmo, fp_subhalo_ids, snap):
+    """Return DMO FoF IDs corresponding to FP central subhalo IDs.
+
+    Reads ``<sim_fp.arepoPath>/postprocessing/SubhaloMatchingToDark/LHaloTree_<snap:03d>.hdf5``
+    which has datasets ``SubhaloIndexFrom`` (FP IDs) and ``SubhaloIndexTo``
+    (DMO IDs). Maps FP subhalo IDs -> DMO subhalo IDs -> DMO FoF IDs via
+    ``SubhaloGrNr``.
+
+    Args:
+        sim_fp: temet sim object for the FP run (provides ``arepoPath``).
+        sim_dmo: temet sim object for the DMO run (provides ``subhalos``).
+        fp_subhalo_ids: Iterable of FP subhalo indices to match (typically
+            the central ``GroupFirstSub`` of qualifying halos).
+        snap: Snapshot number used to locate the matching file.
+
+    Returns:
+        Sorted unique ``np.int64`` array of DMO FoF IDs. Unmatched FP
+        subhalos (mapped to ``-1``) are dropped.
+
+    Raises:
+        FileNotFoundError: If the SubhaloMatchingToDark file is missing.
+    """
+    fp_subhalo_ids = np.asarray(fp_subhalo_ids)
+    match_file = (Path(sim_fp.arepoPath) / "postprocessing"
+                  / "SubhaloMatchingToDark" / f"LHaloTree_{snap:03d}.hdf5")
+    if not match_file.exists():
+        raise FileNotFoundError(f"Matching table not found: {match_file}")
+    with h5py.File(match_file, "r") as mf:
+        match_from = mf["SubhaloIndexFrom"][:]
+        match_to = mf["SubhaloIndexTo"][:]
+
+    match_dict = dict(zip(match_from, match_to))
+    dmo_sub_ids = np.array([match_dict.get(int(s), -1) for s in fp_subhalo_ids])
+    dmo_sub_ids = dmo_sub_ids[dmo_sub_ids >= 0]
+
+    dmo_grnr = sim_dmo.subhalos("SubhaloGrNr")
+    dmo_fof_ids = np.unique(dmo_grnr[dmo_sub_ids])
+    dmo_fof_ids = dmo_fof_ids[dmo_fof_ids >= 0]
+    return dmo_fof_ids.astype(np.int64)
+
+
 def _read_snap_redshift(run_path, snap):
     """Read the redshift of a snapshot from its HDF5 header."""
     run_path = Path(run_path)
@@ -94,7 +135,7 @@ def get_snap_scale_factor(run_path, snap):
 
 
 def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
-                              halo_ids=None, redshift=None):
+                              halo_ids=None, redshift=None, suffix=None):
     """Load pre-computed density profiles from the postprocessing catalog.
 
     Returns profiles in comoving units with little-h removed: radii in
@@ -106,9 +147,12 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
         snap: Snapshot number.
         h: Dimensionless Hubble parameter (default 0.6774).
         use_test: If True, load the ``_test`` variant of the catalog.
+            Ignored when ``suffix`` is given.
         halo_ids: If provided, only load profiles for these FoF IDs.
         redshift: Snapshot redshift. Retained for backward-compat but
             unused; output is comoving with no scale-factor dependence.
+        suffix: Explicit filename suffix to look for, e.g. ``"_new"``,
+            ``"_test"`` or ``""``. Takes precedence over ``use_test``.
 
     Returns:
         Dict mapping FoF index (int) to a dict with keys
@@ -116,7 +160,8 @@ def load_precomputed_profiles(run_path, snap, h=0.6774, use_test=False,
     """
     run_path = Path(run_path)
 
-    suffix = "_test" if use_test else ""
+    if suffix is None:
+        suffix = "_test" if use_test else ""
     fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap:02d}{suffix}.hdf5"
     if not fpath.exists():
         fpath = run_path / "postprocessing" / f"cat_halo_profiles_{snap}{suffix}.hdf5"

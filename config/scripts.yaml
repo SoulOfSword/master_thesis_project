@@ -1,0 +1,46 @@
+# Shared defaults for analysis scripts.
+# Run-specific things (snap, model, variant flags) belong on the CLI.
+
+cosmology:
+  h: 0.6774
+  Omega_m: 0.3089
+  Omega_L: 0.6911
+  Omega_b: 0.0486
+  H0: 67.74            # km/s/Mpc
+
+paths:
+  aida_root:          /leonardo_work/CNHPC_1478837/AIDA/L35n1080
+  scratch_processed:  /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/processed
+  scratch_mordor:     /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/mordor_galaxies
+  fig_root:           /leonardo/home/userexternal/acosta01/master_thesis_project/figures
+  shadow_cdm:         /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/aida_tng/L35n1080_CDM
+
+snap_z:                # canonical snap -> redshift map (AIDA-TNG L35n1080)
+  17: 5.0
+  21: 4.0
+  25: 3.0
+  33: 2.0
+  50: 1.0
+  67: 0.5
+  84: 0.2
+  99: 0.0
+
+# Standard mosaic ordering, low z -> high z
+mosaic_snaps: [67, 50, 33, 25, 21, 17]
+
+models: [CDM, SIDM1, vSIDM]
+
+# AIDA 50/A
+softening:
+  phys_kpc: 0.57
+  three_eps_kpc: 1.71
+
+defaults:
+  mstar_min: 1.0e+8     # Msun (for centrals)  — note explicit `+` so PyYAML parses as float, not str
+  n_dm_min: 0           # DM particles per halo for profile work
+  n_star_min_mordor: 1.0e+4   # stellar particles per central for MORDOR
+
+model_colors:
+  CDM:   black
+  SIDM1: blue
+  vSIDM: red

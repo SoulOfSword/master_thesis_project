@@ -82,7 +82,7 @@ def list_qualifying_hdf5s(model: str, snap: int, res: int, n_star_min: float,
     sim = temet.sim(run="aida", variant=model, res=res, snap=snap)
     cat = build_central_subhalo_catalog(sim)
     sub_ids = qualifying_central_ids(cat, n_star_min=n_star_min)
-    out_dir = Path(out_root) / model
+    out_dir = Path(out_root) / model / f"snap_{int(snap):03d}"
     paths = [out_dir / f"Gal_{int(s):06d}.hdf5" for s in sub_ids]
     return paths, [int(s) for s in sub_ids]
 

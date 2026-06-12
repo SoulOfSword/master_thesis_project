@@ -2,7 +2,7 @@
 
 For one DM model + snapshot, builds the central-subhalo catalog, filters
 by stellar particle count, and writes one Gadget-format HDF5 file per
-qualifying central to `<out_root>/<model>/Gal_<subhalo_id>.hdf5`.
+qualifying central to `<out_root>/<model>/snap_<NNN>/Gal_<subhalo_id>.hdf5`.
 
 The HDF5s are inputs to MORDOR (via `scripts/run_mordor.py`).
 
@@ -49,14 +49,14 @@ def _worker(args):
         return sub_id, False, repr(e)
 
 
-def expected_paths(out_root, model, sub_ids):
-    out_dir = Path(out_root) / model
+def expected_paths(out_root, model, snap, sub_ids):
+    out_dir = Path(out_root) / model / f"snap_{int(snap):03d}"
     return [out_dir / f"Gal_{int(s):06d}.hdf5" for s in sub_ids]
 
 
-def missing_subhalo_ids(out_root, model, sub_ids):
+def missing_subhalo_ids(out_root, model, snap, sub_ids):
     """Subset of sub_ids whose Gal_<id>.hdf5 is not yet on disk."""
-    out_dir = Path(out_root) / model
+    out_dir = Path(out_root) / model / f"snap_{int(snap):03d}"
     return [int(s) for s in sub_ids
             if not (out_dir / f"Gal_{int(s):06d}.hdf5").exists()]
 
@@ -101,13 +101,13 @@ def main():
         print(f"No centrals with N_star >= {args.n_star_min:.0f}; nothing to do.")
         return 0
 
-    out_dir = Path(args.out_root) / args.model
+    out_dir = Path(args.out_root) / args.model / f"snap_{args.snap:03d}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.overwrite:
         todo = list(sub_ids)
     else:
-        todo = missing_subhalo_ids(args.out_root, args.model, sub_ids)
+        todo = missing_subhalo_ids(args.out_root, args.model, args.snap, sub_ids)
     if not todo:
         print(f"All {len(sub_ids)} HDF5s already on disk under {out_dir}/")
         return 0

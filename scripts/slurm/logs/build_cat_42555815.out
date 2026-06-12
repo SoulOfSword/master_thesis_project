@@ -1,0 +1,19 @@
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=67
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=50
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=33
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=25
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=21
+[13:56:06] dispatch build_catalog  MODEL=CDM  SNAP=17
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=67
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=50
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=33
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=25
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=21
+[13:56:06] dispatch build_catalog  MODEL=SIDM1  SNAP=17
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=67
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=50
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=33
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=25
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=21
+[13:56:06] dispatch build_catalog  MODEL=vSIDM  SNAP=17
+[13:56:24] build_catalogs all done
