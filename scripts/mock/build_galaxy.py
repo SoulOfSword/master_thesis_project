@@ -37,7 +37,6 @@ from galaxy_sidm.mock.kinematics import ring_v_over_sigma, ring_kinematics
 
 ALL_STAGES = ["sphview", "cube", "barolo", "kinematics"]
 
-
 def resolve_base_path(model, snap, res, cfg, override=None):
     """Path to the simulation output/ dir (shadow tree for CDM snap 21)."""
     import temet
@@ -114,9 +113,9 @@ def main():
 
     gas = load_galaxy_gas(base_path, args.snap, args.sub_id,
                           h=float(cfg["cosmology"]["h"]))
-    info["n_gas"] = int(len(gas.mHI_g))
+    info["n_gas"] = int(len(gas.mH_neutral_g))
     info["n_star"] = int(len(gas.m_s))
-    info["M_neutral"] = float(np.sum(gas.mHI_g.to_value("Msun")))
+    info["M_neutral"] = float(np.sum(gas.mH_neutral_g.to_value("Msun")))
     print(f"[build_galaxy] gas cells={info['n_gas']} stars={info['n_star']} "
           f"M_neutral={info['M_neutral']:.3e} Msun")
 
@@ -146,10 +145,22 @@ def main():
 
     if "barolo" in stages and cube_fits.exists():
         try:
+            # fixed NRADII by stellar mass: 5 rings below logM*=10.5, else 7
+            mstar = info.get("Mstar") or float(np.sum(gas.m_s.to_value("Msun")))
+            nradii = 5 if np.log10(mstar) < 10.5 else 7
+            info["nradii"] = int(nradii)
+            print(f"[build_galaxy] logM*={np.log10(mstar):.2f} -> NRADII={nradii}")
+            # tie BBarolo's DISTANCE to the same value MARTINI built the cube
+            # with, so RAD(Kpc) is consistent across galaxies (not Vsys-guessed)
+            dist_mpc = CubeParams().distance.to_value("Mpc")
             res = run_bbarolo(cube_fits, gal_dir / "bbarolo",
                               inc_deg=60.0, pa_deg=90.0,
-                              beam_arcsec=30.0, threads=args.ncpu)
-            V, sigma, vsig = ring_kinematics(gal_dir / "bbarolo")
+                              beam_arcsec=30.0, threads=args.ncpu, nradii=nradii,
+                              distance_mpc=dist_mpc)
+            if res.returncode == 0:
+                V, sigma, vsig = ring_kinematics(gal_dir / "bbarolo")
+            else:
+                V = sigma = vsig = float("nan")  # failed fit -> no stale rings
             info.update({"V": V, "sigma": sigma, "V_over_sigma": vsig,
                          "bbarolo_rc": res.returncode})
             print(f"[build_galaxy] BBarolo rc={res.returncode} "
@@ -157,7 +168,8 @@ def main():
         except Exception:
             print("[build_galaxy] barolo FAILED:\n" + traceback.format_exc())
 
-    if "kinematics" in stages and (gal_dir / "bbarolo").exists():
+    if ("kinematics" in stages and (gal_dir / "bbarolo").exists()
+            and info.get("bbarolo_rc", 0) == 0):
         try:
             title = (f"{args.model}" + r" $\vert$ " + f"z={z:g}" + r" $\vert$ " + f"subID {args.sub_id}" + r" $\vert$ " + f"IsDisc={info.get('IsDisc','?')}")
             plot_kinematics(gal_dir / "bbarolo", gal_dir / "kinematics.png",

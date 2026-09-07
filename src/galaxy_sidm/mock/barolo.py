@@ -36,7 +36,7 @@ def _vflat(vrot):
 
 def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
               radsep_arcsec=None, vrot0=100.0, vdisp0=25.0,
-              nradii=None, threads=4, extra=None):
+              nradii=None, threads=4, distance_mpc=None, extra=None):
     """Write a BBarolo 3DFIT parameter file; return its path."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -55,19 +55,23 @@ def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
         # fixed geometry
         f"INC         {inc_deg}",
         f"PA          {pa_deg}",
-        "Z0          0",
+        *( [f"DISTANCE    {distance_mpc}"] if distance_mpc is not None else [] ),
+        # f"NRADII       {nradii}",
+        f"Z0          {radsep/6}",
         f"RADSEP      {radsep}",
         f"VROT        {vrot0}",
         f"VDISP       {vdisp0}",
-        f"VSYS        {vsys:.1f}",
-        "FREE        VROT VDISP",
+        #f"VSYS        {vsys:.1f}",
+        "FREE        VROT VDISP VSYS",
         "SIDE        B",
         "NORM        AZIM",
-        "TWOSTAGE    false",
+        "TWOSTAGE     true",
+        "PLOTMASK     true",
+        "SEARCH       true",
         # mask
-        "MASK        SEARCH",
-        "SNRCUT      3",
-        "GROWTHCUT   2",
+        "MASK        SMOOTH&SEARCH",
+        "SNRCUT      5",
+        "GROWTHCUT   3",
         "FLAGERRORS  false",
     ]
     if nradii is not None:
@@ -80,7 +84,7 @@ def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
 
 def _parse_rings(rings_txt):
     """Read rings_final1.txt -> (rad_kpc, vrot, vdisp). Column order:
-    RAD(arcs) RAD(Kpc) VROT DISP INC PA ..."""
+    RAD(Kpc) RAD(arcs) VROT DISP INC PA ..."""
     rows = []
     for line in Path(rings_txt).read_text().splitlines():
         line = line.strip()
@@ -94,26 +98,61 @@ def _parse_rings(rings_txt):
     arr = np.array(rows) if rows else np.zeros((0, 4))
     if arr.size == 0:
         return np.zeros(0), np.zeros(0), np.zeros(0)
-    return arr[:, 1], arr[:, 2], arr[:, 3]
+    return arr[:, 0], arr[:, 2], arr[:, 3]
+
+_PLOT_SKIP = {"plot_all.py", "plot_pvs_old.py"}
+
+
+def _run_plotscripts(out_dir, timeout=600):
+    """Run BBarolo's generated plot_*.py sequentially; return [failed names]."""
+    import os
+    import sys
+    scripts = sorted(p for p in Path(out_dir).rglob("plot_*.py")
+                     if p.name not in _PLOT_SKIP)
+    env = dict(os.environ, MPLBACKEND="Agg")
+    fails = []
+    for s in scripts:
+        try:
+            r = subprocess.run([sys.executable, str(s)], cwd=str(s.parent),
+                               env=env, capture_output=True, text=True,
+                               timeout=timeout)
+            if r.returncode != 0:
+                fails.append(s.name)
+        except Exception:
+            fails.append(s.name)
+    return fails
 
 
 def run_bbarolo(cube_fits, out_dir, inc_deg=60.0, pa_deg=90.0,
-                beam_arcsec=30.0, bbarolo="BBarolo", timeout=5400, **par_kw):
-    """Run BBarolo on a cube and return a BaroloResult (V, sigma, V/sigma)."""
+                beam_arcsec=30.0, bbarolo="BBarolo", timeout=5400,
+                make_plots=True, **par_kw):
+    """Run BBarolo on a cube and return a BaroloResult (V, sigma, V/sigma).
+    """
     out_dir = Path(out_dir)
     par = write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec, **par_kw)
-    proc = subprocess.run([bbarolo, "-p", str(par)], cwd=str(out_dir),
-                          capture_output=True, text=True, timeout=timeout)
+    # BBarolo intermittently crashes (rc=-11); retry a few times. A non-zero
+    # rc means no fresh rings, so we never parse/plot stale ones below.
+    for attempt in range(1, 6):
+        proc = subprocess.run([bbarolo, "-p", str(par)], cwd=str(out_dir),
+                              capture_output=True, text=True, timeout=timeout)
+        if proc.returncode == 0:
+            break
+        if attempt < 5:
+            print(f"[run_bbarolo] BBarolo rc={proc.returncode}; "
+                  f"retrying ({attempt + 1}/5)")
+    ok = proc.returncode == 0
     rings = sorted(out_dir.rglob("rings_final1.txt"))
     rad = vrot = vdisp = np.zeros(0)
     V = sigma = vsig = float("nan")
     rings_txt = rings[0] if rings else (out_dir / "rings_final1.txt")
-    if rings:
+    if rings and ok:
         rad, vrot, vdisp = _parse_rings(rings[0])
     if len(vrot):
         V = 0.5 * (float(np.max(vrot)) + _vflat(vrot))
         sigma = float(np.mean(vdisp))
         vsig = V / sigma if sigma > 0 else float("nan")
+    if make_plots and rings and ok:
+        _run_plotscripts(out_dir)
     return BaroloResult(
         out_dir=out_dir, rings_txt=rings_txt, rad_kpc=rad, vrot=vrot,
         vdisp=vdisp, V=V, sigma=sigma, V_over_sigma=vsig,

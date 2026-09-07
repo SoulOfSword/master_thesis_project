@@ -7,12 +7,12 @@ figure (kinematics).
 
 from .gas import GalaxyGas, load_galaxy_gas
 from .sphview import render_face_edge
-from .cube import CubeParams, build_cube
+from .cube import CubeParams, build_cube, hi_radius_kpc
 from .barolo import BaroloResult, run_bbarolo
 from .kinematics import plot_kinematics
 
 __all__ = [
-    "GalaxyGas", "load_galaxy_gas", "render_face_edge",
+    "GalaxyGas", "load_galaxy_gas", "render_face_edge", "hi_radius_kpc",
     "CubeParams", "build_cube", "BaroloResult", "run_bbarolo",
     "plot_kinematics",
 ]

@@ -171,14 +171,26 @@ def worker_main(args):
             elif not line.startswith("#") and tok:
                 done.add(tok[0])
 
+    images_root = args.images_root
     with open(out_path, "a", buffering=1) as fout:
         for p in paths:
             key = str(p.resolve())
             if key in done or p.name in done:
                 continue
+            imgs = None
+            if images_root is not None:
+                # path is <root>/<MODEL>/snap_<NN>/Gal_<id>.hdf5
+                model, snap, gid = p.parent.parent.name, p.parent.name, p.stem
+                imgs = {
+                    "edist": images_root / "energy_dists" / model / snap / f"{gid}_edist.png",
+                    "circ": images_root / "circularities" / model / snap / f"{gid}_circ.png",
+                    "map": images_root / "particle_maps" / model / snap / f"{gid}_map.png",
+                    "title": f"{model} {snap} {gid}",
+                }
             try:
                 gal = run_mordor_single(
                     p, mode=args.mode, soft_phys_kpc=args.soft_phys_kpc,
+                    images=imgs,
                 )
                 fout.write(format_mordor_row(gal, key) + "\n")
             except Exception as e:
@@ -280,6 +292,8 @@ def master_main(args):
             "--mode", args.mode,
             "--soft-phys-kpc", f"{args.soft_phys_kpc}",
         ]
+        if args.images_root is not None:
+            cmd += ["--images-root", str(args.images_root)]
         log_path = chunk_dir / f"chunk_{ch['id']:03d}.log"
         log_fp = open(log_path, "w")
         worker_env = os.environ.copy()
@@ -289,17 +303,30 @@ def master_main(args):
 
     total = planned_galaxy_count(plan)
     t0 = time.time()
-    pbar = tqdm(total=total, unit="gal", desc=f"MORDOR {args.model}")
+    # tqdm's bar only renders on a TTY; under srun it gets swallowed (it updates
+    # with \r and no newline, so srun's line buffer never flushes it). So disable
+    # the bar off-TTY and ALSO emit a plain, newline-terminated [progress] line
+    # every ~30s — that flushes through any buffering and is always visible.
+    pbar = tqdm(total=total, unit="gal", desc=f"MORDOR {args.model}",
+                disable=not sys.stderr.isatty())
     last = 0
+    last_print = 0.0
     try:
         while any(pp["proc"].poll() is None for pp in procs):
             done = sum(count_processed_lines(pp["chunk"]["out"]) for pp in procs)
             pbar.update(done - last)
             last = done
+            if time.time() - last_print >= 30:
+                print(f"[progress] {args.model} snap {args.snap}: {done}/{total} "
+                      f"({100 * done // max(total, 1)}%), {(time.time() - t0) / 60:.1f} min",
+                      flush=True)
+                last_print = time.time()
             time.sleep(2.0)
         # final tick
         done = sum(count_processed_lines(pp["chunk"]["out"]) for pp in procs)
         pbar.update(done - last)
+        print(f"[progress] {args.model} snap {args.snap}: {done}/{total} done, "
+              f"{(time.time() - t0) / 60:.1f} min", flush=True)
     finally:
         pbar.close()
         for pp in procs:
@@ -379,6 +406,10 @@ def build_parser():
     p.add_argument("--mode", default="cosmo_sim",
                    help="MORDOR potential mode (default cosmo_sim)")
     p.add_argument("--soft-phys-kpc", type=float, default=0.57)
+    p.add_argument("--images-root", type=Path, default=None,
+                   help="If set, write 3 diagnostic PNGs per galaxy under "
+                        "<root>/{energy_dists,circularities,particle_maps}/"
+                        "<model>/snap_NN/ (energy hist, circularity, ShowPlots map)")
     p.add_argument("--base-path", type=Path, default=None,
                    help="Override snapshot basePath (passed through to "
                         "extract_galaxies.py; for SCRATCH shadow trees)")

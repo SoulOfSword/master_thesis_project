@@ -13,6 +13,7 @@ import astropy.units as U
 
 from .gas import GalaxyGas
 
+_ARCSEC_PER_RAD = 206264.806
 
 @dataclass
 class CubeParams:
@@ -25,9 +26,45 @@ class CubeParams:
     position_angle: U.Quantity = 90.0 * U.deg
     fov_factor: float = 4.0 # FOV = fov_factor * stellar half-mass radius
     max_npix: int = 400
-    add_noise: bool = False
+    add_noise: bool = True
     noise_rms: U.Quantity = 1.0e-5 * U.Jy / U.arcsec ** 2
 
+def hi_radius_kpc(gas, sigma_thresh=1.0, dr_kpc=0.5):
+    """Face-on neutral-gas size R_HI (kpc).
+
+    Outermost radius at which the azimuthally-averaged neutral-hydrogen
+    surface density falls to `sigma_thresh` (Msun/pc^2; 1.0 is the standard
+    R_HI definition). Uses the same neutral field fed to MARTINI
+    (`mH_neutral_g`) and the disc plane already measured for the galaxy
+    (`gas.L_hat`, the inner-gas angular momentum) -> the size is consistent
+    with the cube. Built from the 3-D particles, not the beam-smeared,
+    inclined datacube.
+
+    Args:
+        gas: GalaxyGas (needs xyz_g, mH_neutral_g, L_hat).
+        sigma_thresh: surface-density threshold in Msun/pc^2.
+        dr_kpc: radial bin width in kpc.
+
+    Returns:
+        R_HI in kpc (outermost crossing, linearly interpolated between the
+        bracketing bins), or 0.0 if the profile never reaches the threshold.
+    """
+    x = gas.xyz_g.to_value(U.kpc)
+    m = gas.mH_neutral_g.to_value(U.Msun)
+    zhat = np.asarray(gas.L_hat, dtype=float)                # inner-disc normal
+    R = np.linalg.norm(x - np.outer(x @ zhat, zhat), axis=1)  # face-on radius
+    edges = np.arange(0.0, R.max() + dr_kpc, dr_kpc) # radial bins
+    msum, _ = np.histogram(R, bins=edges, weights=m) # Msun in each ring
+    sigma = msum / (np.pi * (edges[1:] ** 2 - edges[:-1] ** 2) * 1e6) # Msun/pc^2
+    cent = 0.5 * (edges[1:] + edges[:-1]) # ring-centre radii in kpc
+    above = np.where(sigma >= sigma_thresh)[0] #indices of rings above the threshold
+    if len(above) == 0:
+        return 0.0
+    k = int(above[-1]) # outermost ring above thresh
+    if k == len(sigma) - 1:
+        return float(cent[k]) # never drops within the data
+    s0, s1 = sigma[k], sigma[k + 1]
+    return float(cent[k] + (cent[k + 1] - cent[k]) * (s0 - sigma_thresh) / (s0 - s1))
 
 def _n_px(gas: GalaxyGas, p: CubeParams):
     """Pixels per side: FOV = fov_factor x stellar half-mass radius.
@@ -40,7 +77,7 @@ def _n_px(gas: GalaxyGas, p: CubeParams):
         w = gas.m_s.to_value(U.Msun)
     else:
         r = np.linalg.norm(gas.xyz_g.to_value(U.kpc)[:, :2], axis=1)
-        w = gas.mHI_g.to_value(U.Msun)
+        w = gas.mH_neutral_g.to_value(U.Msun)
     order = np.argsort(r)
     cum = np.cumsum(w[order])
     r50 = r[order][np.searchsorted(cum, 0.5 * cum[-1])] if len(r) else 4.0
@@ -72,7 +109,7 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
     # gas angular momentum, but the cube is oriented by the position angle parameter; the source has a systemic velocity set by the gas, but the cube is centred on zero velocity
     source = SPHSource(
         distance=p.distance,
-        mHI_g=gas.mHI_g[keep],
+        mHI_g=gas.mH_neutral_g[keep], #MARTINI wants mHI_g
         xyz_g=gas.xyz_g[keep],
         vxyz_g=gas.vxyz_g[keep],
         T_g=gas.T_g[keep],

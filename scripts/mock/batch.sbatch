@@ -6,7 +6,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=12:00:00
-#SBATCH --array=0-423%20
+#SBATCH --array=0-423%424
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=costa@astro.rug.nl
 #SBATCH --output=/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/martini/logs/mock_%A_%a.out
 
 # login shell (-l) pulls in module load python/3.11.7 via ~/.bashrc
@@ -17,18 +19,20 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 PROJ=/leonardo/home/userexternal/acosta01/master_thesis_project
 MANIFEST="${MANIFEST:-/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/martini/manifest.txt}"
 CHUNK="${CHUNK:-10}"
+STAGES="${STAGES:-sphview,cube,barolo,kinematics}"   # e.g. STAGES=barolo,kinematics to re-fit only
 cd "$PROJ"
 
 start=$(( SLURM_ARRAY_TASK_ID * CHUNK + 1 ))
 end=$(( start + CHUNK - 1 ))
 echo "[$(date +%F_%T)] task=$SLURM_ARRAY_TASK_ID host=$(hostname) lines=${start}..${end} chunk=$CHUNK"
 
+# removed --skip-existing
 sed -n "${start},${end}p" "$MANIFEST" | while read -r model snap sub; do
     [ -z "${model:-}" ] && continue
     echo "--- $(date +%T) $model snap=$snap sub=$sub ---"
     python3 -u scripts/mock/build_galaxy.py \
         --model "$model" --snap "$snap" --sub-id "$sub" \
-        --ncpu "$SLURM_CPUS_PER_TASK" --skip-existing \
+        --ncpu "$SLURM_CPUS_PER_TASK" --stages "$STAGES" \
         || echo "!!! FAILED $model snap=$snap sub=$sub rc=$?"
 done
 echo "[$(date +%F_%T)] task=$SLURM_ARRAY_TASK_ID DONE"

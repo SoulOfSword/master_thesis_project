@@ -153,26 +153,27 @@ def run_mordor_batch(filelist_path, mode="cosmo_sim",
     return dest
 
 
-def run_mordor_single(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
-                      mordor_dir=DEFAULT_MORDOR_DIR):
-    """Decompose one galaxy and return the pynbody snap with morph set.
+def load_and_align(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
+                   mordor_dir=DEFAULT_MORDOR_DIR):
+    """Load one galaxy and apply MORDOR's potential fix + centering + faceon.
 
-    Imports MORDOR's `decomposition` module and runs it in this Python
-    process (no subprocess). The returned pynbody snapshot has
-    `gal.s['morph']`, `gal.s['te']`, and `gal.s['jz_by_jzcirc']`
-    populated — suitable for diagnostic plots in the (eta, E) plane.
+    This is exactly the preamble `run_mordor_single` runs *before* calling
+    `decomposition.morph`, factored out so any other diagnostic that needs
+    MORDOR-consistent energies (e.g. `stellar_te`) aligns the galaxy the SAME
+    way MORDOR does — same hybrid shrinking-sphere centre, hence the same bulk
+    velocity subtracted from `ke` — instead of re-deriving a centre by hand.
 
     Args:
-        hdf5_path: Per-galaxy HDF5 file (as produced by
-            `extract_galaxy_hdf5`).
-        mode: MORDOR potential mode. 'cosmo_sim' uses the snapshot's
-            stored Potential field with a 1/a^2 fix.
+        hdf5_path: Per-galaxy HDF5 file (as produced by `extract_galaxy_hdf5`).
+        mode: MORDOR potential mode. 'cosmo_sim' uses the snapshot's stored
+            Potential field with the 1/a^2 fix.
         soft_phys_kpc: Plummer-equivalent softening in kpc; sets
             `gal['eps'] = 2.8 * soft_phys_kpc` per particle if missing.
-        mordor_dir: Directory containing `decomposition.py`.
+        mordor_dir: Directory containing `decomposition.py` (only needed on
+            sys.path for the 'tree'/'direct' potential helpers).
 
     Returns:
-        Decomposed pynbody simulation snapshot.
+        Aligned pynbody simulation snapshot (NOT decomposed).
     """
     import sys
     import numpy as np
@@ -181,12 +182,16 @@ def run_mordor_single(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
     mordor_dir = Path(mordor_dir).expanduser().resolve()
     if str(mordor_dir) not in sys.path:
         sys.path.insert(0, str(mordor_dir))
-    import decomposition  # noqa: E402
 
     gal = pynbody.load(str(Path(hdf5_path).resolve()))
     gal.physical_units()
 
-    eps_kpc = 2.8 * float(soft_phys_kpc)
+    # soft_phys_kpc is that z<=1 physical value (0.57 kpc for AIDA L35/50A;
+    # MORDOR ships with TNG50's 0.288). Match the z-scaling, else high-z eps
+    # is too large and disagrees with mordor.py.
+    z = float(gal.properties["z"])
+    soft_z = soft_phys_kpc if z <= 1 else soft_phys_kpc * 2.0 / (1.0 + z)
+    eps_kpc = 2.8 * float(soft_z)
     if "eps" not in gal:
         gal["eps"] = pynbody.array.SimArray(
             eps_kpc * np.ones_like(gal["x"], dtype=gal["x"].dtype), "kpc")
@@ -225,8 +230,79 @@ def run_mordor_single(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
     size_ang = max(3*hmr, eps_kpc)
     pynbody.analysis.angmom.faceon(gal.s, disk_size=f"{size_ang} kpc",
                                     already_centered=True)
-
-    decomposition.morph(gal, j_circ_from_r=False, LogInterp=False,
-                        BoundOnly=True, Ecut=None, jThinMin=0.7,
-                        mode=mode, dimcell=None)
     return gal
+
+
+def run_mordor_single(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
+                      mordor_dir=DEFAULT_MORDOR_DIR, images=None):
+    """Decompose one galaxy and return the pynbody snap with morph set.
+
+    Imports MORDOR's `decomposition` module and runs it in this Python
+    process (no subprocess). The returned pynbody snapshot has
+    `gal.s['morph']`, `gal.s['te']`, and `gal.s['jz_by_jzcirc']`
+    populated — suitable for diagnostic plots in the (eta, E) plane.
+
+    Args:
+        hdf5_path: Per-galaxy HDF5 file (as produced by
+            `extract_galaxy_hdf5`).
+        mode: MORDOR potential mode. 'cosmo_sim' uses the snapshot's
+            stored Potential field with a 1/a^2 fix.
+        soft_phys_kpc: Plummer-equivalent softening in kpc; sets
+            `gal['eps'] = 2.8 * soft_phys_kpc` per particle if missing.
+        mordor_dir: Directory containing `decomposition.py`.
+
+    Returns:
+        Decomposed pynbody simulation snapshot.
+    """
+    import sys
+
+    mordor_dir = Path(mordor_dir).expanduser().resolve()
+    if str(mordor_dir) not in sys.path:
+        sys.path.insert(0, str(mordor_dir))
+    import decomposition  # noqa: E402
+    decomposition.debug = False     # headless: suppress MORDOR's debug figures
+
+    gal = load_and_align(hdf5_path, mode=mode, soft_phys_kpc=soft_phys_kpc,
+                         mordor_dir=mordor_dir)
+    profiles = decomposition.morph(gal, j_circ_from_r=False, LogInterp=False,
+                                   BoundOnly=True, Ecut=None, jThinMin=0.7,
+                                   mode=mode, dimcell=None)
+    # Optional diagnostic images
+    if images is not None:
+        from .diagnostics import save_all
+        save_all(gal, profiles, images["edist"], images["circ"],
+                 images["map"], title=images.get("title", ""))
+    return gal
+
+
+def stellar_te(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57,
+               mordor_dir=DEFAULT_MORDOR_DIR):
+    """Stellar binding energy `te = ke + phi`, computed EXACTLY as MORDOR does.
+
+    Aligns the galaxy with `load_and_align` (so the per-star kinetic energy
+    uses MORDOR's hybrid-centred bulk velocity, not a global mean) and then
+    forms `te = ke + phi` with the unit handling copied verbatim from
+    `decomposition.morph`.
+
+    Note: this is genuine MORDOR work (full pynbody load + hybrid centering
+    of every particle type). Run it on a compute node, and keep the worker
+    count modest — a massive central can use several GB on its own.
+
+    Args:
+        hdf5_path: Per-galaxy HDF5 file.
+        mode, soft_phys_kpc, mordor_dir: As in `run_mordor_single`.
+
+    Returns:
+        (te, mass): float64 arrays of the stellar specific binding energy
+        [km^2 s^-2] and stellar mass [Msol], one entry per star particle.
+    """
+    import numpy as np
+
+    gal = load_and_align(hdf5_path, mode=mode, soft_phys_kpc=soft_phys_kpc,
+                         mordor_dir=mordor_dir)
+    ke = gal["ke"]
+    pe = gal["phi"]
+    gal["phi"].convert_units(ke.units)
+    gal["te"] = ke + pe
+    return (np.asarray(gal.s["te"], dtype=np.float64),
+            np.asarray(gal.s["mass"], dtype=np.float64))

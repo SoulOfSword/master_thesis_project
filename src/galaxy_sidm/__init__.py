@@ -9,6 +9,8 @@ This package provides tools for:
 - MCMC inference for model parameters
 """
 
+import jax; jax.config.update("jax_enable_x64", True)
+
 from . import config
 from . import cosmology
 from . import data

@@ -42,3 +42,25 @@ def critical_density(z = 0, cosmo = None):
     # astropy returns in g/cm^3, convert to Msun/kpc^3
     rho_crit = cosmo.critical_density(z).to("Msun/kpc^3").value
     return rho_crit
+
+
+def delta_c_bryan_norman(z, cosmo):
+    """Virial overdensity Delta_c(z) w.r.t. the CRITICAL density.
+
+    Bryan & Norman (1998) fitting formula for a flat LambdaCDM universe:
+
+        Delta_c = 18*pi^2 + 82*x - 39*x^2 ,   x = Omega_m(z) - 1
+
+    i.e. Delta_c -> 18*pi^2 ~ 178 in the matter-dominated (high-z) limit and
+    ~ 100 today. Used to relate virial mass, radius and velocity across
+    redshift (M_vir proportional to V_vir^3 * Delta_c^-1/2 * H^-1).
+
+    Args:
+        z: redshift (scalar or array).
+        cosmo: astropy FlatLambdaCDM (from `get_cosmology(config)`).
+
+    Returns:
+        Delta_c(z), same shape as z.
+    """
+    x = cosmo.Om(z) - 1.0
+    return 18.0 * np.pi ** 2 + 82.0 * x - 39.0 * x ** 2

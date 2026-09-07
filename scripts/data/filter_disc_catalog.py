@@ -78,8 +78,8 @@ def main():
 
     if keep.sum() == 0:
         print(f"[filter_disc_catalog] {model} snap {snap}: 0 disc galaxies "
-              f"after filter (catalog had {len(cat_halo_ids)}, mordor sample "
-              f"had {len(md_halo_ids)} with {int(is_disc.sum())} disc)")
+              f"after filter (catalog had {len(fp_first_sub)}, mordor sample "
+              f"had {len(md_subhalo_ids)} with {int(is_disc.sum())} disc)")
         return 0
 
     filtered = {k: np.asarray(v)[keep] for k, v in cat_arrays.items()}
@@ -96,7 +96,7 @@ def main():
 
     save_flat(out_path, filtered, cuts=cuts, metadata=meta)
     print(f"[filter_disc_catalog] {model} snap {snap}: "
-          f"{keep.sum()}/{len(cat_halo_ids)} halos are MORDOR discs "
+          f"{keep.sum()}/{len(fp_first_sub)} halos are MORDOR discs "
           f"-> {out_path}")
     return 0
 

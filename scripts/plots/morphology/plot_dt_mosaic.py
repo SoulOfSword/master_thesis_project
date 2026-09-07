@@ -186,7 +186,7 @@ def main():
     axes[-1].legend(loc="upper right", fontsize=12)
 
     out_path = args.out or (fig_root / "morphology"
-                            / "dt_vs_mstar_mosaic_redshift.pdf")
+                            / "discfrac_vs_mstar_mosaic_redshift.pdf")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"[plot_dt_mosaic] saved {out_path}")

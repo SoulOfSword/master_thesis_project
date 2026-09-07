@@ -63,7 +63,7 @@ def render_face_edge(gas: GalaxyGas, out_path, half_kpc=None, npix=512,
                      num_threads=4, star_neighbours=32, label=None):
     R = _disc_frame_rotation(gas.L_hat)
     xg = gas.xyz_g.to_value(U.kpc) @ R.T
-    mHI = gas.mHI_g.to_value(U.Msun)
+    mHI = gas.mH_neutral_g.to_value(U.Msun)
     hg = gas.hsm_g.to_value(U.kpc)
     xs = gas.xyz_s.to_value(U.kpc) @ R.T
     ms = gas.m_s.to_value(U.Msun)

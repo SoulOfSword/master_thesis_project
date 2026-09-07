@@ -48,6 +48,9 @@ def main():
     p.add_argument("--mem-per-worker", default="4G")
     p.add_argument("--mode", default="cosmo_sim")
     p.add_argument("--soft-phys-kpc", type=float, default=0.57)
+    p.add_argument("--images-root", type=Path, default=None,
+                   help="If set, write 3 diagnostic PNGs per galaxy under this "
+                        "root (passed through to run_mordor.py).")
     p.add_argument("--out-root", type=Path, default=DEFAULT_OUT_ROOT)
     p.add_argument("--force", action="store_true",
                    help="Rerun even if output ASCII already exists.")
@@ -88,7 +91,8 @@ def main():
         print(f"{'=' * 70}\n", flush=True)
 
         cmd = [
-            sys.executable, str(RUN_MORDOR),
+            sys.executable, "-u", str(RUN_MORDOR),    # -u: unbuffered so the
+            #   worker's tqdm/progress prints stream live instead of buffering
             "--model", model,
             "--snap", str(snap),
             "--max-workers", str(args.max_workers),
@@ -98,10 +102,18 @@ def main():
             "--out-root", str(args.out_root),
             "--output-dir", str(out_dir),
             "--work-dir", str(work_dir),
-            "--resume",
         ]
+        # --force = regenerate from scratch, so do NOT --resume. Resuming would
+        # skip galaxies already present in the per-chunk .out files (from the
+        # previous catalog build) -> they would NOT be re-decomposed and would
+        # get NO diagnostic images. Without --resume, run_mordor.py deletes the
+        # stale chunk outputs and reprocesses everything.
+        if not args.force:
+            cmd.append("--resume")
         if args.base_path is not None:
             cmd += ["--base-path", str(args.base_path)]
+        if args.images_root is not None:
+            cmd += ["--images-root", str(args.images_root)]
 
         t_start = time.time()
         rc = subprocess.run(cmd).returncode

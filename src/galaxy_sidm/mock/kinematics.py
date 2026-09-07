@@ -57,8 +57,15 @@ def _galaxy_mask(mom0, frac=0.03):
     return lab == biggest
 
 
-def _rings(bb):
-    """(rad_kpc, vrot, vdisp) from rings_final1.txt (cols 0, 2, 3)."""
+def _rings(bb, distance_mpc=5.0):
+    """(rad_kpc, vrot, vdisp) from rings_final1.txt.
+
+    rad_kpc is rebuilt from RAD(arcs) (col 1) at the TRUE distance, not the
+    RAD(Kpc) column 0 BBarolo writes: col 0 is wrong whenever DISTANCE was not
+    passed to BBarolo (it back-computes distance from Vsys, ~2.4-7.2 Mpc
+    instead of 5). Col 1 is distance-independent -> correct for fits already on
+    disk. cols used: 1=arcs, 2=VROT, 3=DISP.
+    """
     f = bb / "rings_final1.txt"
     if not f.exists():
         return (np.zeros(0),) * 3
@@ -67,7 +74,8 @@ def _rings(bb):
     a = np.array([[float(c) for c in r[:4]] for r in rows if len(r) >= 4])
     if a.size == 0:
         return (np.zeros(0),) * 3
-    return a[:, 0], a[:, 2], a[:, 3]
+    rad_kpc = a[:, 1] / _ARCSEC_PER_RAD * distance_mpc * 1e3
+    return rad_kpc, a[:, 2], a[:, 3]
 
 
 def _v_over_sigma(vrot, vdisp):
@@ -98,7 +106,7 @@ def _rings_trimmed(bb, distance_mpc=5.0):
     """Rings cut to the HI emission radius. BBarolo fits data-free outer
     rings that otherwise inflate V (Vflat) and deflate sigma."""
     bb = Path(bb)
-    rad, vrot, vdisp = _rings(bb)
+    rad, vrot, vdisp = _rings(bb, distance_mpc)
     if len(rad):
         keep = rad <= _emission_radius(bb, distance_mpc)
         rad, vrot, vdisp = rad[keep], vrot[keep], vdisp[keep]
@@ -228,7 +236,7 @@ def plot_kinematics(bbarolo_dir, out_path, distance_mpc=5.0, inc_deg=60.0,
     # BBarolo fits rings out past the HI emission; those data-free outer rings
     # spuriously inflate V (Vflat) and deflate sigma. Cut at the emission edge.
     r_emit = rr * kpp
-    rad, vrot, vdisp = _rings(bb)
+    rad, vrot, vdisp = _rings(bb, distance_mpc)
     if len(rad):
         keep = rad <= r_emit
         rad, vrot, vdisp = rad[keep], vrot[keep], vdisp[keep]

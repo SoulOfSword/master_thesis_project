@@ -1,0 +1,5 @@
+# Hand-classified calibration galaxies for the residual disc/perturbed split
+CDM:
+  z2:
+    discs: [39854, 40591, 36518, 38906, 37800, 40262, 50476, 34381, 29759, 17905]
+    perturbed: [34602, 39548, 22129, 29924, 19038, 15182, 14097, 16483, 18026, 15697]
