@@ -6,7 +6,7 @@ whose output ASCII already exists and is non-empty (use --force to
 override). After each combo, reports DONE / FAILED and continues.
 
 Defaults:
-  snaps  = 67, 50, 33, 25, 17  (z = 0.5, 1, 2, 3, 5)
+  snaps  = 67, 50, 33, 25, 21, 17  (z = 0.5, 1, 2, 3, 4, 5)
   models = CDM, SIDM1, vSIDM
 
 Output layout (per combo):
@@ -34,7 +34,7 @@ SCRATCH = Path(os.environ.get(
 DEFAULT_OUT_ROOT = SCRATCH / "master_thesis_project" / "data" / "mordor_galaxies"
 RUN_MORDOR = Path(__file__).resolve().parent / "run_mordor.py"
 
-DEFAULT_SNAPS = [67, 50, 33, 25, 17]
+DEFAULT_SNAPS = [67, 50, 33, 25, 21, 17]
 DEFAULT_MODELS = ["CDM", "SIDM1", "vSIDM"]
 
 
