@@ -1,21 +1,24 @@
 #!/bin/bash
-#SBATCH -A EUHPC_R05_084
-#SBATCH -p dcgp_usr_prod
+#SBATCH -p regular
 #SBATCH -J filter_disc
-#SBATCH -t 02:00:00
+#SBATCH -t 01:00:00
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH --mem=0
-#SBATCH -o /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm/filter_disc_%j.out
+#SBATCH -n 1
+#SBATCH -c 18
+#SBATCH --mem=32G
+#SBATCH -o /scratch/s4636708/aida/derived/logs/slurm/filter_disc_%j.out
 #
 # Filter FP catalogs down to MORDOR-disc galaxies. Requires FP catalogs
 # (from build_catalogs.sbatch) AND mordor samples (from
 # build_mordor_samples.sbatch) to exist beforehand.
 
 set -euo pipefail
+source "$HOME/software/habrok_env.sh"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-PROJECT=/leonardo/home/userexternal/acosta01/master_thesis_project
-LOGS_DIR="/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm"
+PROJECT=/home2/s4636708/master_thesis_project
+DATA=/scratch/s4636708/aida/derived
+LOGS_DIR="$DATA/logs/slurm"
 mkdir -p "$LOGS_DIR"
 cd "$PROJECT"
 
@@ -25,13 +28,13 @@ SNAPS=(67 50 33 25 21 17)
 MSTAR_TAG=1e+08
 NDM_TAG=0
 
-N_PARALLEL=16
+N_PARALLEL=$SLURM_CPUS_PER_TASK
 
 for MODEL in "${MODELS[@]}"; do
     for SNAP in "${SNAPS[@]}"; do
         SNAP3=$(printf "%03d" "$SNAP")
-        FP_CAT="$SCRATCH/master_thesis_project/data/processed/catalogs/catalog_${MODEL}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}.hdf5"
-        MORDOR_SAMPLE="$SCRATCH/master_thesis_project/data/mordor_galaxies/samples/mordor_sample_${MODEL}_${SNAP3}.hdf5"
+        FP_CAT="$DATA/processed/catalogs/catalog_${MODEL}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}.hdf5"
+        MORDOR_SAMPLE="$DATA/mordor_galaxies/samples/mordor_sample_${MODEL}_${SNAP3}.hdf5"
         if [ ! -f "$FP_CAT" ]; then
             echo "[$(date +%H:%M:%S)] skip $MODEL snap $SNAP — no FP catalog"
             continue

@@ -12,7 +12,8 @@ What it does:
   5. divides by NOISE_RMS (1e-5, the value fed to MARTINI) -> the intrinsic S/N.
 
 Run it on a compute node (MARTINI is memory-hungry):
-  srun --account=euhpc_r05_084 --partition=dcgp_usr_prod --nodes=1 --ntasks=1 --cpus-per-task=8 --time=00:30:00 python3 scripts/mock/snr_reference.py
+  source ~/software/habrok_env.sh
+  srun --partition=regular --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=16G --time=00:30:00 python3 scripts/mock/snr_reference.py
 """
 
 import shutil

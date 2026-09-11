@@ -70,8 +70,8 @@ def main():
     p.add_argument("--seed", type=int, default=0,
                    help="RNG seed for the scatter subsample (default 0)")
     p.add_argument("--base-path", type=Path, default=None,
-                   help="Override snapshot basePath (e.g. SCRATCH shadow "
-                        "tree when snapshot data is not in $WORK)")
+                   help="Override snapshot basePath (e.g. a shadow tree "
+                        "when a snapshot is not in the main run dir)")
     p.add_argument("--out-fig", type=Path, default=None,
                    help="Output figure path; default "
                         "<fig_root>/morphology/eta_E_<model>_<snap>_<sub>.pdf")

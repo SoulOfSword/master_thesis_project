@@ -1,7 +1,8 @@
 #!/bin/bash
-# Submit the density-mosaic chain on dcgp_usr_prod. Uses `sbatch --wait`
-# so only one job is queued at a time (avoids QOS submit-limit issues),
-# and each stage blocks until the previous finishes.
+# Submit the density-mosaic chain on Habrok (partition `regular`). Uses
+# `sbatch --wait` so each stage blocks until the previous one finishes.
+# The DMO stages only do something once the DMO data is on Habrok; without
+# it they skip/fail per combo and the chain carries on (FP-only).
 #
 # Usage (run in tmux so SSH drops don't kill it):
 #   tmux new -s pipeline

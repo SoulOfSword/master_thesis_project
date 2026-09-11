@@ -48,14 +48,15 @@ from scipy.signal import find_peaks
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
+from galaxy_sidm.io import load_config
 from galaxy_sidm.morphology import run_mordor_single
 
 MORDOR_DIR = Path.home() / "software" / "mordor"
 if str(MORDOR_DIR) not in sys.path:
     sys.path.insert(0, str(MORDOR_DIR))
 
-DEFAULT_GAL = ("/leonardo_scratch/large/userexternal/acosta01/master_thesis_project"
-               "/data/mordor_galaxies/SIDM1/snap_021/Gal_001913.hdf5")
+GAL_ROOT = Path(load_config()["paths"]["scratch_mordor"])
+DEFAULT_GAL = str(GAL_ROOT / "SIDM1" / "snap_021" / "Gal_001913.hdf5")
 
 
 def mordor_te_and_ecut(hdf5_path, mode="cosmo_sim", soft_phys_kpc=0.57):
@@ -132,10 +133,6 @@ def plot_diagnostic(mm, ecut_mordor, out_path, title=""):
     #fig.savefig(out_path, dpi=150)
     #plt.close(fig)
     plt.show()
-
-
-GAL_ROOT = Path("/leonardo_scratch/large/userexternal/acosta01/"
-                "master_thesis_project/data/mordor_galaxies")
 
 
 def _galaxy_row(task):

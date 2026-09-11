@@ -45,10 +45,10 @@ import decomposition
 decomposition.debug = False                 # no debug popups
 matplotlib.use("Agg", force=True)           # decomposition imports flip the
 #   backend to WebAgg; force it back or a stray figure spawns a blocking server
+from galaxy_sidm.io import load_config
 from galaxy_sidm.morphology import run_mordor_single, stellar_te
 
-GAL_ROOT = Path("/leonardo_scratch/large/userexternal/acosta01/"
-                "master_thesis_project/data/mordor_galaxies")
+GAL_ROOT = Path(load_config()["paths"]["scratch_mordor"])
 
 
 def _norm(te):

@@ -34,11 +34,12 @@ from typing import List, Tuple
 import numpy as np
 from tqdm import tqdm
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 
-SCRATCH = Path(os.environ.get(
-    "SCRATCH", "/leonardo_scratch/large/userexternal/acosta01"
-))
-DEFAULT_OUT_ROOT = SCRATCH / "master_thesis_project" / "data" / "mordor_galaxies"
+from galaxy_sidm.io import load_config
+
+DEFAULT_OUT_ROOT = Path(load_config()["paths"]["scratch_mordor"])
 DEFAULT_OUTPUT_DIR = DEFAULT_OUT_ROOT / "outputs"
 
 EXTRACT_SCRIPT = Path(__file__).resolve().parent / "extract_galaxies.py"
@@ -412,7 +413,7 @@ def build_parser():
                         "<model>/snap_NN/ (energy hist, circularity, ShowPlots map)")
     p.add_argument("--base-path", type=Path, default=None,
                    help="Override snapshot basePath (passed through to "
-                        "extract_galaxies.py; for SCRATCH shadow trees)")
+                        "extract_galaxies.py; for shadow trees)")
     p.add_argument("--resume", action="store_true",
                    help="Skip galaxies already in chunk outputs")
     return p

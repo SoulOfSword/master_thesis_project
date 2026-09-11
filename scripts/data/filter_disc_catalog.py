@@ -20,8 +20,8 @@ attrs:
 
 Usage:
     python scripts/data/filter_disc_catalog.py \\
-        --catalog $SCRATCH/.../catalogs/catalog_CDM_067_mstar1e+08_ndm0.hdf5 \\
-        --mordor-sample $SCRATCH/.../samples/mordor_sample_CDM_067.hdf5
+        --catalog /scratch/s4636708/aida/derived/processed/catalogs/catalog_CDM_067_mstar1e+08_ndm0.hdf5 \\
+        --mordor-sample /scratch/s4636708/aida/derived/mordor_galaxies/samples/mordor_sample_CDM_067.hdf5
 """
 
 import argparse

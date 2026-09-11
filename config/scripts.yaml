@@ -8,12 +8,12 @@ cosmology:
   Omega_b: 0.0486
   H0: 67.74            # km/s/Mpc
 
-paths:
-  aida_root:          /leonardo_work/CNHPC_1478837/AIDA/L35n1080
-  scratch_processed:  /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/processed
-  scratch_mordor:     /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/mordor_galaxies
-  fig_root:           /leonardo/home/userexternal/acosta01/master_thesis_project/figures
-  shadow_cdm:         /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/data/aida_tng/L35n1080_CDM
+paths:                 # Habrok
+  aida_root:          /scratch/s4636708/aida
+  scratch_processed:  /scratch/s4636708/aida/derived/processed
+  scratch_mordor:     /scratch/s4636708/aida/derived/mordor_galaxies
+  fig_root:           /home2/s4636708/master_thesis_project/figures
+  shadow_cdm:         null   # Leonardo-only
 
 snap_z:                # canonical snap -> redshift map (AIDA-TNG L35n1080)
   17: 5.0

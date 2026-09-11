@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit the disc-only data chain in sequence (one job at a time).
+# Submit the disc-only data chain on Habrok in sequence (one job at a time).
 # Requires: regular FP catalogs already built (build_catalogs.sbatch) AND
 # MORDOR samples already built (build_mordor_samples.sbatch).
 #

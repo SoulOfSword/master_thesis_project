@@ -1,20 +1,22 @@
 #!/bin/bash
-#SBATCH -A EUHPC_R05_084
-#SBATCH -p dcgp_usr_prod
+#SBATCH -p regular
 #SBATCH -J gamma
-#SBATCH -t 02:00:00
+#SBATCH -t 04:00:00
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH --mem=0
-#SBATCH -o /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm/gamma_%j.out
+#SBATCH -n 1
+#SBATCH -c 18
+#SBATCH --mem=64G
+#SBATCH -o /scratch/s4636708/aida/derived/logs/slurm/gamma_%j.out
 #
-# Compute gamma_DM per (FP or DMO) catalog. One dcgp node, combos in
-# parallel inside the job.
+# Compute gamma_DM per (FP or DMO) catalog. Combos in parallel inside the job.
 
 set -euo pipefail
+source "$HOME/software/habrok_env.sh"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-PROJECT=/leonardo/home/userexternal/acosta01/master_thesis_project
-LOGS_DIR="/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm"
+PROJECT=/home2/s4636708/master_thesis_project
+DATA=/scratch/s4636708/aida/derived
+LOGS_DIR="$DATA/logs/slurm"
 mkdir -p "$LOGS_DIR"
 cd "$PROJECT"
 
@@ -28,14 +30,14 @@ NDM_TAG=0
 # Variant — pass through to compute_gamma.py
 R_OUTER_KIND=nfw_rs       # "nfw_rs" or "r200c"
 
-N_PARALLEL=32
+N_PARALLEL=$SLURM_CPUS_PER_TASK
 
 for MODEL in "${MODELS[@]}"; do
     for KIND in "${KINDS[@]}"; do
         for SNAP in "${SNAPS[@]}"; do
             SNAP3=$(printf "%03d" "$SNAP")
-            CAT="$SCRATCH/master_thesis_project/data/processed/catalogs/catalog_${MODEL}${KIND}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}.hdf5"
-            PROF=$(ls -1 "$SCRATCH/master_thesis_project/data/processed/profiles/profiles_${MODEL}${KIND}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}"*.hdf5 2>/dev/null | head -n1 || true)
+            CAT="$DATA/processed/catalogs/catalog_${MODEL}${KIND}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}.hdf5"
+            PROF=$(ls -1 "$DATA/processed/profiles/profiles_${MODEL}${KIND}_${SNAP3}_mstar${MSTAR_TAG}_ndm${NDM_TAG}"*.hdf5 2>/dev/null | head -n1 || true)
             if [ ! -f "$CAT" ] || [ -z "${PROF:-}" ] || [ ! -f "${PROF}" ]; then
                 echo "[$(date +%H:%M:%S)] skip ${MODEL}${KIND} snap $SNAP — missing inputs"
                 continue
