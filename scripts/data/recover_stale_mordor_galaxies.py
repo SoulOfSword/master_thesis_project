@@ -13,8 +13,8 @@ different snapshot's file (the historic flat-dir collision). This:
 The morphology table is backed up to `<name>.bak` before rewriting.
 Rebuild the samples afterwards with `build_mordor_sample.py`.
 
-CDM snap 21 is read from the SCRATCH shadow tree (`paths.shadow_cdm`)
-since its snapshot is not in $WORK.
+If `paths.shadow_cdm` is set, CDM snap 21 is read from that shadow tree
+(Leonardo only, where the snapshot was missing from $WORK; null on Habrok).
 
 Usage:
     python scripts/data/recover_stale_mordor_galaxies.py             # dry-run

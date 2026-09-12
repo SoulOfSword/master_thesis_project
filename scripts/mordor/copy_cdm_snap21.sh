@@ -1,4 +1,7 @@
 #!/bin/bash
+# LEONARDO ONLY (kept for the record). Not needed on Habrok: the transferred
+# CDM run already has a complete snapdir_021, so paths.shadow_cdm is null.
+#
 # Build a shadow CDM tree in $SCRATCH that contains:
 #   - real copies of snapdir_021/ and offsets_021.hdf5 (sourced from /leonardo_store)
 #   - symlinks to everything else already in $WORK

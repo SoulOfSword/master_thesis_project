@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -26,15 +25,18 @@ import numpy as np
 from tqdm import tqdm
 
 import temet
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
 from galaxy_sidm.data.aida_tng import (
     build_central_subhalo_catalog, qualifying_central_ids,
 )
+from galaxy_sidm.io import load_config
 from galaxy_sidm.morphology import extract_galaxy_hdf5
 
 
-DEFAULT_OUT_ROOT = Path(os.environ.get(
-    "SCRATCH", "/leonardo_scratch/large/userexternal/acosta01"
-)) / "master_thesis_project" / "data" / "mordor_galaxies"
+DEFAULT_OUT_ROOT = Path(load_config()["paths"]["scratch_mordor"])
 
 
 def _worker(args):
@@ -84,8 +86,8 @@ def main():
     parser.add_argument("--limit", type=int, default=None,
                         help="Process only the first N qualifying subhalos")
     parser.add_argument("--base-path", type=Path, default=None,
-                        help="Override snapshot basePath (e.g. SCRATCH shadow "
-                             "tree when snapshot data is not in $WORK)")
+                        help="Override snapshot basePath (e.g. a shadow tree "
+                             "when a snapshot is not in the main run dir)")
     args = parser.parse_args()
 
     sim = temet.sim(run="aida", variant=args.model,

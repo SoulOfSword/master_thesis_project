@@ -1,8 +1,12 @@
 """MARTINI datacube from a galaxy's neutral gas.
 
 Galaxy at 5 Mpc, 5" pixels, 30" beam (~720 pc), 30 km/s channels x64,
-inclined 60 deg at PA 90 (set from the gas angular momentum). Noise off
-by default.
+inclined 60 deg at PA 90 (set from the gas angular momentum).
+
+Noise: the same `noise_rms` for every galaxy, or -- with `reference_snr` set --
+the same signal-to-noise for every galaxy: noise_rms = signal / reference_snr,
+with `signal` (measure_signal) taken from the galaxy's own noiseless,
+beam-convolved cube. `reference_snr` comes from scripts/mock/snr_reference.py.
 """
 
 from dataclasses import dataclass
@@ -28,6 +32,33 @@ class CubeParams:
     max_npix: int = 400
     add_noise: bool = True
     noise_rms: U.Quantity = 1.0e-5 * U.Jy / U.arcsec ** 2
+    # constant S/N: if set, noise_rms = signal / reference_snr for each galaxy
+    # (same Jy/arcsec^2 convention as noise_rms; from snr_reference.py)
+    reference_snr: float = None
+    signal_peak_fraction: float = 0.1  # signal = mean of voxels >= this x brightest voxel
+    noise_seed: int = 0  # MARTINI noise RNG seed (0 = MARTINI's default)
+
+
+@dataclass
+class CubeResult:
+    fits: Path
+    npix: int
+    signal: float     # Jy/beam, from the noiseless cube (nan if not measured)
+    noise_rms: float  # Jy/arcsec^2 given to MARTINI (0 if no noise)
+
+
+def measure_signal(cube, peak_fraction=0.1):
+    """Mean brightness of the voxels >= peak_fraction x the brightest voxel.
+
+    Meant for a NOISELESS cube. Only voxels with emission enter the mean, so the
+    value does not depend on the size of the image (an average over all pixels
+    would also count empty sky). Returns nan if the cube has no emission.
+    """
+    c = np.nan_to_num(np.asarray(cube, dtype=float))
+    peak = c.max()
+    if peak <= 0:
+        return float("nan")
+    return float(c[c >= peak_fraction * peak].mean())
 
 def hi_radius_kpc(gas, sigma_thresh=1.0, dr_kpc=0.5):
     """Face-on neutral-gas size R_HI (kpc).
@@ -71,15 +102,21 @@ def _n_px(gas: GalaxyGas, p: CubeParams):
 
     Stars trace the disc; the neutral-gas half-mass radius is biased high
     by a diffuse envelope, which over-sizes the cube.
+
+    The half-mass radius is measured face-on, in the plane of the gas disc
+    (normal gas.L_hat, the axis MARTINI inclines), so it does not depend on
+    how the galaxy happens to be oriented in the simulation box.
     """
     if len(gas.m_s):
-        r = np.linalg.norm(gas.xyz_s.to_value(U.kpc)[:, :2], axis=1)
+        xyz = gas.xyz_s.to_value(U.kpc)
         w = gas.m_s.to_value(U.Msun)
     else:
-        r = np.linalg.norm(gas.xyz_g.to_value(U.kpc)[:, :2], axis=1)
+        xyz = gas.xyz_g.to_value(U.kpc)
         w = gas.mH_neutral_g.to_value(U.Msun)
-    order = np.argsort(r)
-    cum = np.cumsum(w[order])
+    zhat = np.asarray(gas.L_hat, dtype=float)
+    r = np.linalg.norm(xyz - np.outer(xyz @ zhat, zhat), axis=1) # face-on radius
+    order = np.argsort(r) # sort by radius
+    cum = np.cumsum(w[order]) # cumulative mass profile
     r50 = r[order][np.searchsorted(cum, 0.5 * cum[-1])] if len(r) else 4.0
     half_kpc = float(np.clip(p.fov_factor * r50, 8.0, 20.0))
     half_ang = (half_kpc * U.kpc / p.distance).to_value(
@@ -90,7 +127,7 @@ def _n_px(gas: GalaxyGas, p: CubeParams):
 
 
 def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
-    """Generate and write the MARTINI datacube. Returns the FITS path."""
+    """Generate and write the MARTINI datacube. Returns a CubeResult."""
     from martini import Martini, DataCube
     from martini.sources.sph_source import SPHSource
     from martini.sph_kernels import CubicSplineKernel
@@ -124,20 +161,41 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
         spectral_centre=source.vsys,
     )
     beam = GaussianBeam(bmaj=p.beam_fwhm, bmin=p.beam_fwhm, bpa=0.0 * U.deg)
-    noise = GaussianNoise(rms=p.noise_rms) if p.add_noise else None
     spectral_model = GaussianSpectrum(sigma="thermal")
     sph_kernel = CubicSplineKernel()
 
-    M = Martini(source=source, datacube=datacube, beam=beam, noise=noise,
+    # noise is attached after insertion: in constant-S/N mode its rms depends
+    # on the galaxy's own noiseless cube
+    M = Martini(source=source, datacube=datacube, beam=beam, noise=None,
                 sph_kernel=sph_kernel, spectral_model=spectral_model,
                 quiet=True)
     M.init_spectra()
     M.insert_source_in_cube(ncpu=ncpu)
-    if noise is not None:
+
+    signal = float("nan")
+    rms = p.noise_rms if p.add_noise else None
+    if p.add_noise and p.reference_snr is not None:
+        # measure the signal on a beam-convolved copy of the noiseless cube,
+        # then go back to the unconvolved cube to add the matching noise
+        noiseless = M._datacube.copy()
+        M.convolve_beam()
+        signal = measure_signal(M._datacube._array.to_value(U.Jy / U.beam),
+                                p.signal_peak_fraction)
+        if not np.isfinite(signal):
+            raise RuntimeError("noiseless cube has no emission: cannot set the "
+                               "constant-S/N noise")
+        M._datacube = noiseless
+        rms = signal / p.reference_snr * U.Jy / U.arcsec ** 2
+    if rms is not None:
+        M.noise = GaussianNoise(rms=rms, seed=p.noise_seed)
         M.add_noise()
     M.convolve_beam()
+    if not p.add_noise:
+        signal = measure_signal(M._datacube._array.to_value(U.Jy / U.beam),
+                                p.signal_peak_fraction)
 
     out_fits = Path(out_fits)
     out_fits.parent.mkdir(parents=True, exist_ok=True)
     M.write_fits(str(out_fits), overwrite=True)
-    return out_fits, npix
+    return CubeResult(fits=out_fits, npix=npix, signal=signal,
+                      noise_rms=float(rms.value) if rms is not None else 0.0)

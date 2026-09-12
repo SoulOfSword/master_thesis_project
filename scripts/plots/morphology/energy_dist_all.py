@@ -39,10 +39,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
+from galaxy_sidm.io import load_config
 from galaxy_sidm.morphology import stellar_te
 
-GAL_ROOT = Path("/leonardo_scratch/large/userexternal/acosta01/"
-                "master_thesis_project/data/mordor_galaxies")
+GAL_ROOT = Path(load_config()["paths"]["scratch_mordor"])
 
 
 def _norm(te):

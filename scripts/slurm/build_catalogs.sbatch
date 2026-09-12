@@ -1,27 +1,29 @@
 #!/bin/bash
-#SBATCH -A EUHPC_R05_084
-#SBATCH -p dcgp_usr_prod
+#SBATCH -p regular
 #SBATCH -J build_cat
-#SBATCH -t 02:00:00
+#SBATCH -t 01:00:00
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH --mem=0
-#SBATCH -o /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm/build_cat_%j.out
+#SBATCH -n 1
+#SBATCH -c 18
+#SBATCH --mem=64G
+#SBATCH -o /scratch/s4636708/aida/derived/logs/slurm/build_cat_%j.out
 #
-# Build FP catalogs for every (MODEL, SNAP) combo. One dcgp node, runs
-# combos in parallel inside the job.
+# Build FP catalogs for every (MODEL, SNAP) combo. One single-threaded
+# python per combo, run in parallel inside the job (-c = one core per combo).
 
 set -euo pipefail
+source "$HOME/software/habrok_env.sh"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-PROJECT=/leonardo/home/userexternal/acosta01/master_thesis_project
-LOGS_DIR="/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm"
+PROJECT=/home2/s4636708/master_thesis_project
+LOGS_DIR="/scratch/s4636708/aida/derived/logs/slurm"
 mkdir -p "$LOGS_DIR"
 cd "$PROJECT"
 
 MODELS=(CDM SIDM1 vSIDM)
 SNAPS=(67 50 33 25 21 17)
 
-N_PARALLEL=32
+N_PARALLEL=$SLURM_CPUS_PER_TASK
 
 for MODEL in "${MODELS[@]}"; do
     for SNAP in "${SNAPS[@]}"; do

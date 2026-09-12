@@ -27,8 +27,8 @@ Examples
 --------
 Standard, one component-set:
     python scripts/plots/density/plot_density_mosaic.py \\
-        --catalogs $SCRATCH/.../catalogs/*.hdf5 \\
-        --profiles $SCRATCH/.../profiles/*.hdf5 \\
+        --catalogs /scratch/s4636708/aida/derived/processed/catalogs/*.hdf5 \\
+        --profiles /scratch/s4636708/aida/derived/processed/profiles/*.hdf5 \\
         --components dm,stars
 
 Big notebook-style mosaic with all three component-sets:
@@ -176,9 +176,9 @@ def _load_mstar(cat_arrays):
 def _resolve_basepath(sim, model, snap, cfg):
     """Return a basePath that actually has snapdir_<snap>/ on disk.
 
-    `temet.sim().simPath` points at the canonical $WORK path. For combos
-    where the snapshot was copied into a SCRATCH shadow tree (e.g. CDM
-    snap 21), $WORK is missing the snapdir and we fall back to the shadow
+    `temet.sim().simPath` points at the canonical run path ($AIDA_ROOT). For
+    combos where the snapshot lives in a shadow tree instead (Leonardo: CDM
+    snap 21), the snapdir is missing there and we fall back to the shadow
     path declared in cfg['paths']['shadow_<model_lowercase>']/output.
     Falls through to the default if no shadow override resolves either.
     """

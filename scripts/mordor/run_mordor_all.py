@@ -21,17 +21,17 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 
-SCRATCH = Path(os.environ.get(
-    "SCRATCH", "/leonardo_scratch/large/userexternal/acosta01"
-))
-DEFAULT_OUT_ROOT = SCRATCH / "master_thesis_project" / "data" / "mordor_galaxies"
+from galaxy_sidm.io import load_config
+
+DEFAULT_OUT_ROOT = Path(load_config()["paths"]["scratch_mordor"])
 RUN_MORDOR = Path(__file__).resolve().parent / "run_mordor.py"
 
 DEFAULT_SNAPS = [67, 50, 33, 25, 21, 17]
@@ -56,7 +56,7 @@ def main():
                    help="Rerun even if output ASCII already exists.")
     p.add_argument("--base-path", type=Path, default=None,
                    help="Override snapshot basePath (passed through to "
-                        "run_mordor.py; for SCRATCH shadow trees, applies "
+                        "run_mordor.py; for shadow trees, applies "
                         "to all (model, snap) combos in this invocation)")
     args = p.parse_args()
 

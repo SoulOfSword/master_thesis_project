@@ -1,33 +1,36 @@
 #!/bin/bash
-#SBATCH -A EUHPC_R05_084
-#SBATCH -p dcgp_usr_prod
+#SBATCH -p regular
 #SBATCH -J mordor_samples
-#SBATCH -t 02:00:00
+#SBATCH -t 01:00:00
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH --mem=0
-#SBATCH -o /leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm/mordor_samples_%j.out
+#SBATCH -n 1
+#SBATCH -c 18
+#SBATCH --mem=64G
+#SBATCH -o /scratch/s4636708/aida/derived/logs/slurm/mordor_samples_%j.out
 #
 # For each (MODEL, SNAP) combo: parse MORDOR ASCII output + join with the
 # halo catalog + compute the interacting flag, then save one HDF5 sample
-# per combo. One dcgp node, combos run in parallel inside the job.
+# per combo. Combos run in parallel inside the job.
 
 set -euo pipefail
+source "$HOME/software/habrok_env.sh"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-PROJECT=/leonardo/home/userexternal/acosta01/master_thesis_project
-LOGS_DIR="/leonardo_scratch/large/userexternal/acosta01/master_thesis_project/logs/slurm"
+PROJECT=/home2/s4636708/master_thesis_project
+DATA=/scratch/s4636708/aida/derived
+LOGS_DIR="$DATA/logs/slurm"
 mkdir -p "$LOGS_DIR"
 cd "$PROJECT"
 
 MODELS=(CDM SIDM1 vSIDM)
 SNAPS=(67 50 33 25 21 17)
 
-N_PARALLEL=16
+N_PARALLEL=$SLURM_CPUS_PER_TASK
 
 for MODEL in "${MODELS[@]}"; do
     for SNAP in "${SNAPS[@]}"; do
         SNAP3=$(printf "%03d" "$SNAP")
-        MORDOR_TXT="$SCRATCH/master_thesis_project/data/mordor_galaxies/outputs/snap_${SNAP3}/morphology_${MODEL}.txt"
+        MORDOR_TXT="$DATA/mordor_galaxies/outputs/snap_${SNAP3}/morphology_${MODEL}.txt"
         if [ ! -s "$MORDOR_TXT" ]; then
             echo "[$(date +%H:%M:%S)] skip ${MODEL} snap $SNAP — no MORDOR output at $MORDOR_TXT"
             continue
