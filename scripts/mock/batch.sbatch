@@ -29,7 +29,10 @@ export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 PROJ=/home2/s4636708/master_thesis_project
 MANIFEST="${MANIFEST:-/scratch/s4636708/aida/derived/martini/manifest.txt}"
 CHUNK="${CHUNK:-10}"
-STAGES="${STAGES:-sphview,cube,barolo,kinematics}"   # e.g. STAGES=barolo,kinematics to re-fit only
+# Stages: sphview, cube, barolo_3rings, barolo (final fit), kinematics.
+# For now everything up to the 3-ring fit; the final fit later with
+#   STAGES=barolo,kinematics sbatch scripts/mock/batch.sbatch
+STAGES="${STAGES:-sphview,cube,barolo_3rings}"
 cd "$PROJ"
 
 start=$(( SLURM_ARRAY_TASK_ID * CHUNK + 1 ))

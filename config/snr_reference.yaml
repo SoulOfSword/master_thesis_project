@@ -1,0 +1,10 @@
+# Written by scripts/mock/snr_reference.py -- rerun it instead of editing.
+reference_snr: 13059.46391968701
+signal: 0.13059463919687012
+noise_rms: 1.0e-05
+signal_peak_fraction: 0.1
+galaxy:
+  model: CDM
+  snap: 33
+  sub_id: 29759
+created: '2026-09-11T18:02:51+00:00'

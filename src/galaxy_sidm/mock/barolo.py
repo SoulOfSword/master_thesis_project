@@ -26,6 +26,52 @@ class BaroloResult:
     returncode: int
 
 
+@dataclass
+class MajorAxisExtent:
+    xpos: float          # fit centre [pix], as BBarolo writes/reads XPOS, YPOS
+    ypos: float
+    left_arcsec: float   # centre -> last non-NaN pixel, on each side
+    right_arcsec: float
+
+
+def major_axis_extent(bbarolo_dir):
+    """How far the data velocity field reaches along the major axis.
+
+    Uses BBarolo's DATA moment-1 map (maps/*_1mom.fits: the masked data, the
+    same whatever the number of rings fitted) and the fit centre from
+    rings_final1.txt. With PA = 90 deg the major axis is the map row through
+    the centre; on each side this returns the distance from the centre to the
+    last non-NaN pixel of the emission patch containing the centre, so isolated
+    noise specks elsewhere in the map do not count.
+    """
+    from astropy.io import fits
+    from scipy import ndimage
+
+    bb = Path(bbarolo_dir)
+    maps = [p for p in sorted((bb / "maps").glob("*_1mom.fits")) if "mod" not in p.name]
+    if not maps:
+        raise FileNotFoundError(f"no data moment-1 map in {bb / 'maps'}")
+    mom1 = np.squeeze(fits.getdata(maps[0])).astype(float)
+    px_arcsec = abs(fits.getheader(maps[0])["CDELT1"]) * 3600.0
+
+    first_ring = next(line.split() for line in (bb / "rings_final1.txt").read_text().splitlines()
+                      if line.strip() and not line.startswith("#"))
+    xpos, ypos = float(first_ring[9]), float(first_ring[10])  # XPOS(pix) YPOS(pix)
+    x0 = int(np.clip(round(xpos), 0, mom1.shape[1] - 1))
+    y0 = int(np.clip(round(ypos), 0, mom1.shape[0] - 1))
+
+    patches, n = ndimage.label(np.isfinite(mom1))
+    patch = patches[y0, x0]
+    if patch == 0 and n > 0:  # centre pixel blank: use the biggest patch
+        patch = int(np.argmax(np.bincount(patches.ravel())[1:])) + 1
+    xs = np.flatnonzero(patches[y0] == patch) if patch else np.zeros(0, int)
+    if not len(xs):
+        return MajorAxisExtent(xpos, ypos, 0.0, 0.0)
+    return MajorAxisExtent(xpos, ypos,
+                           left_arcsec=float(max(0, x0 - xs.min()) * px_arcsec),
+                           right_arcsec=float(max(0, xs.max() - x0) * px_arcsec))
+
+
 def _vflat(vrot):
     """Vflat = velocity at the smallest change between consecutive rings."""
     if len(vrot) < 2:
