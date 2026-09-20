@@ -5,7 +5,7 @@ Each galaxy's existing position-velocity plot
 is stitched onto its own titled page of one multi-page PDF (via PyMuPDF),
 so you can flip through the fits and choose a per-category NRADII by eye.
 
-Two modes:
+Three modes:
 
   --mode all   (default): every MORDOR disc in ONE (model, snap), one page
                per galaxy, sorted by stellar mass. Default SIDM1, snap 21
@@ -16,9 +16,15 @@ Two modes:
                the two nearest the bin centre (two most massive for the open
                top bin), for comparison. The "pick NRADII per category" view.
 
-Only MORDOR discs (IsDisc==1) that already have a MOCK_pv_azim.pdf are
-included; missing ones are skipped and tallied. Each page title carries
-    model | z | subID | logMstar | NRADII  (ring count from rings_final1.txt)
+  --mode calibration: the hand-classified galaxies of --labels
+               (config/residual_calibration.yaml), every model and redshift in
+               it, discs first, then unsure discs, then perturbed; the class
+               leads the page title. Default output
+               figures/pvs/calibration/pv_calibration.pdf.
+
+In modes all and bins only MORDOR discs (IsDisc==1) are used. Galaxies without a
+MOCK_pv_azim.pdf are skipped and tallied. Each page title carries
+    model | z | subID | logMstar | NRADII  (ring count from the rings file)
 so you can read off how many rings the current fit used.
 
 Usage:
@@ -28,9 +34,11 @@ Usage:
   python scripts/mock/collate_pv.py --mode bins --mass-edges 9.5 10 10.5 11 11.5
   python scripts/mock/collate_pv.py --out /path/review.pdf
   python scripts/mock/collate_pv.py --exclude config/problematic_discs.yaml  # gas-discs only
+  python scripts/mock/collate_pv.py --mode calibration    # residual_calibration.yaml galaxies
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -41,9 +49,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config, load_flat
+from galaxy_sidm.mock.barolo import rings_file
 
 DEFAULT_SNAPS = [17, 21, 25, 33, 50, 67]        # z = 5, 4, 3, 2, 1, 0.5
 DEFAULT_MASS_EDGES = [9.5, 10.0, 10.5, 11.0, 11.5]  # log10(Mstar / Msun)
+# (key in the labels file, name in the page title), in page order
+CALIBRATION_CLASSES = (("discs", "disc"), ("unsure_discs", "unsure disc"),
+                       ("perturbed", "perturbed"))
 
 
 def _paths(cfg):
@@ -82,9 +94,10 @@ def _pv_pdf(mart, model, snap, snap_z, sub_id):
 
 
 def _nrings(pv_pdf):
-    """Ring count fitted, read from the sibling rings_final1.txt ('?' if absent)."""
-    rf = pv_pdf.parent / "rings_final1.txt"
-    if not rf.exists():
+    """Ring count fitted, from the sibling rings file ('?' if absent)."""
+    try:
+        rf = rings_file(pv_pdf.parent)
+    except FileNotFoundError:
         return "?"
     n = sum(1 for ln in rf.read_text().splitlines()
             if ln.strip() and not ln.startswith("#") and len(ln.split()) > 3)
@@ -120,7 +133,10 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", choices=["all", "bins"], default="all")
+    p.add_argument("--mode", choices=["all", "bins", "calibration"], default="all")
+    p.add_argument("--labels", type=Path,
+                   default=ROOT / "config" / "residual_calibration.yaml",
+                   help="calibration galaxies for --mode calibration")
     p.add_argument("--model", default="SIDM1",
                    choices=["CDM", "SIDM1", "vSIDM", "WDM3", "WDM5"])
     p.add_argument("--snap", type=int, default=21,
@@ -138,6 +154,8 @@ def main():
     snap_z = {int(k): float(v) for k, v in cfg["snap_z"].items()}
     mart, mdir = _paths(cfg)
 
+    if args.out is None and args.mode == "calibration":
+        args.out = ROOT / "figures" / "pvs" / "calibration" / "pv_calibration.pdf"
     if args.out is None:
         subdir = "gas_discs" if args.exclude else "all"
         tag = "gasdiscs" if args.exclude else "all"
@@ -167,6 +185,28 @@ def main():
                 included += 1
             else:
                 skipped += 1
+    elif args.mode == "calibration":
+        import yaml
+        labels = yaml.safe_load(args.labels.read_text()) or {}
+        z_snap = {z: s for s, z in snap_z.items()}
+        for model, by_z in labels.items():
+            for zkey, classes in (by_z or {}).items():
+                z = float(zkey[1:])
+                for cls, name in CALIBRATION_CLASSES:
+                    for sub in (classes or {}).get(cls) or []:
+                        pv = _pv_pdf(mart, model, z_snap[z], snap_z, int(sub))
+                        if not pv.exists():
+                            print(f"  missing {pv}")
+                            skipped += 1
+                            continue
+                        info = json.loads((pv.parent.parent / "info.json").read_text())
+                        lm = f"{np.log10(info['Mstar']):.2f}" if info.get("Mstar") else "?"
+                        title = (f"{name} | {model} | z={z:g} | subID {sub} | "
+                                 f"logM*={lm} | NRADII={_nrings(pv)}")
+                        if _add_page(out, pv, title):
+                            included += 1
+                        else:
+                            skipped += 1
     else:  # bins: one representative per (snap, mass bin)
         edges = args.mass_edges
         # adjacent [lo,hi) bins, plus an open-ended top bin so the most

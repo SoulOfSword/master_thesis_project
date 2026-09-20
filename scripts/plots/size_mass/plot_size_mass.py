@@ -9,8 +9,9 @@ Two styles:
     overlaid : 1xN_snaps, all models overlaid in each panel (default).
     grid     : N_snaps x N_models, one model per column.
 
-Stellar half-mass radius is read directly from the catalog's 'Rhalf_star'
-field (comoving ckpc, h-removed; see build_catalog.py).
+Stellar half-mass radius is the catalog's 'Rhalf_star' (comoving kpc, h removed;
+see build_catalog.py), converted to physical kpc with the snapshot redshift,
+R / (1 + z), so the relation can be compared with observations.
 
 Output (under cfg['paths']['fig_root']/size_mass/):
     size_mass[.<style>].pdf
@@ -65,10 +66,10 @@ def _running_median(log_m, log_r, mbins, n_min):
     return np.asarray(out_c), np.asarray(out_m)
 
 
-def _xy(arrs, mstar_floor):
-    """Pull (log10 Mstar, log10 Rhalf_star) for valid centrals."""
+def _xy(arrs, mstar_floor, z):
+    """Pull (log10 Mstar, log10 Rhalf_star in physical kpc) for valid centrals."""
     m = arrs["Mstar"]
-    r = arrs["Rhalf_star"]
+    r = arrs["Rhalf_star"] / (1.0 + z)   # catalog radius is comoving
     sel = (m > mstar_floor) & (r > 0)
     return np.log10(m[sel]), np.log10(r[sel])
 
@@ -92,8 +93,9 @@ def plot_overlaid(by_key, snaps, snap_z, models, colors, mbins, n_min,
             ax.set_title(f"snap {snap}", fontsize=16)
             continue
 
+        z = snap_z.get(snap)
         for model in present:
-            log_m, log_r = _xy(by_key[(model, snap)], mstar_floor)
+            log_m, log_r = _xy(by_key[(model, snap)], mstar_floor, z)
             color = colors.get(model, "grey")
             ax.scatter(log_m, log_r, s=10, alpha=0.3, color=color,
                        edgecolors="grey", linewidths=0.15)
@@ -103,13 +105,12 @@ def plot_overlaid(by_key, snaps, snap_z, models, colors, mbins, n_min,
                 ax.plot(c, med, "-", color=lighten(color, 0.6), lw=2,
                         label=model)
 
-        z = snap_z.get(snap)
         ax.set_title(rf"$z = {z:.1f}$" if z is not None else f"snap {snap}",
                      fontsize=16)
         ax.set_xlabel(r"$\log_{10}(M_\star\;/\;\mathrm{M_\odot})$",
                       fontsize=16)
         if col == 0:
-            ax.set_ylabel(r"$\log_{10}(R_{1/2,\star}\;/\;\mathrm{ckpc})$",
+            ax.set_ylabel(r"$\log_{10}(R_{1/2,\star}\;/\;\mathrm{pkpc})$",
                           fontsize=16)
             ax.legend(fontsize=12)
 
@@ -139,7 +140,7 @@ def plot_grid(by_key, snaps, snap_z, models, colors, mbins, n_min,
                         ha="center", va="center", color="grey", fontsize=12)
             else:
                 any_present = True
-                log_m, log_r = _xy(arrs, mstar_floor)
+                log_m, log_r = _xy(arrs, mstar_floor, z)
                 color = colors.get(model, "grey")
                 ax.scatter(log_m, log_r, s=25, alpha=0.5, color=color,
                            edgecolors="grey", linewidths=0.15)
@@ -155,7 +156,7 @@ def plot_grid(by_key, snaps, snap_z, models, colors, mbins, n_min,
             if col == 0:
                 zlabel = rf"$z = {z:.1f}$" + "\n" if z is not None else ""
                 ax.set_ylabel(zlabel + r"$\log_{10}(R_{1/2,\star}\;/\;"
-                              r"\mathrm{ckpc})$", fontsize=16)
+                              r"\mathrm{pkpc})$", fontsize=16)
             if row == len(snaps) - 1:
                 ax.set_xlabel(r"$\log_{10}(M_\star\;/\;\mathrm{M_\odot})$",
                               fontsize=16)

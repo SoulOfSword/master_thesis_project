@@ -2,6 +2,7 @@
 
 from .kinematics import (
     circular_velocity_from_mass,
+    vcirc_disc_plane,
     velocity_dispersion_3d,
     velocity_dispersion_1d,
     specific_angular_momentum,

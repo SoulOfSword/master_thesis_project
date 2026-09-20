@@ -73,15 +73,17 @@ foundation → results.
 |---|---|---|---|
 | `src/.../mock/gas.py` | 146 | **core** | load one galaxy's gas + stars |
 | `src/.../mock/cube.py` | 144 | **core** | MARTINI mock HI cube |
-| `src/.../mock/barolo.py` | 160 | **core** | BBarolo tilted-ring fit |
+| `src/.../mock/barolo.py` | 252 | **core** | BBarolo tilted-ring fit |
 | `src/.../mock/kinematics.py` | 308 | **core** | ring V/σ + the 4-panel kinematics figure |
 | `src/.../mock/tables.py` | 122 | **core** | assemble the disc table → **feeds TFR/SHMR** |
-| `src/.../mock/residuals.py` | 69 | **core** | data−model residuals (the disc classifier) |
+| `src/.../mock/residuals.py` | 112 | **core** | data−model residuals, raw and noise-floor-subtracted (disc classifier) |
+| `src/.../mock/asymmetry.py` | 119 | **core** | He+2026 3D asymmetry A (second disc classifier) |
 | `src/.../mock/sphview.py` | 150 | helper | face-on/edge-on surface-density maps |
 | `scripts/mock/build_galaxy.py` | 188 | **core** | the pipeline driver (gas→cube→barolo→kinematics) |
 | `scripts/mock/make_manifest.py` | 52 | helper | build the batch work list |
 | `scripts/mock/snr_reference.py` | 92 | **core (in progress)** | intrinsic-S/N reference — *the task you paused on* |
 | `scripts/mock/{disc_quality,collate_pv,run_bbarolo_plots,reprocess_kinematics}.py` | 139,219,95,64 | diag/helper | residual ranking, PV review PDF, plot runners, V/σ refresh |
+| `scripts/plots/disc_quality/plot_residual_split.py` / `plot_asymmetry.py` | 320, 308 | **core (figures)** | residuals and 3D asymmetry per calibration class and for all galaxies |
 | `scripts/plots/scaling/plot_tfr.py` / `plot_shmr.py` | 140, 203 | **core (figures)** | **the TFR & SHMR thesis figures** |
 | `scripts/plots/size_mass/plot_size_mass.py` | 235 | helper (figure) | size–mass relation |
 

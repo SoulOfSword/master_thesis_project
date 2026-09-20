@@ -30,6 +30,9 @@ class CubeParams:
     position_angle: U.Quantity = 90.0 * U.deg
     fov_factor: float = 4.0 # FOV = fov_factor * stellar half-mass radius
     max_npix: int = 400
+    # explicit FOV half-width [kpc], e.g. a larger cube for an extended galaxy:
+    # replaces the r50 rule, its 8-20 kpc clip and max_npix
+    half_kpc: float = None
     add_noise: bool = True
     noise_rms: U.Quantity = 1.0e-5 * U.Jy / U.arcsec ** 2
     # constant S/N: if set, noise_rms = signal / reference_snr for each galaxy
@@ -43,6 +46,7 @@ class CubeParams:
 class CubeResult:
     fits: Path
     npix: int
+    half_kpc: float   # FOV half-width used, kpc
     signal: float     # Jy/beam, from the noiseless cube (nan if not measured)
     noise_rms: float  # Jy/arcsec^2 given to MARTINI (0 if no noise)
 
@@ -119,11 +123,14 @@ def _n_px(gas: GalaxyGas, p: CubeParams):
     cum = np.cumsum(w[order]) # cumulative mass profile
     r50 = r[order][np.searchsorted(cum, 0.5 * cum[-1])] if len(r) else 4.0
     half_kpc = float(np.clip(p.fov_factor * r50, 8.0, 20.0))
+    max_npix = p.max_npix
+    if p.half_kpc is not None:   # explicit FOV (CubeParams.half_kpc)
+        half_kpc, max_npix = float(p.half_kpc), np.inf
     half_ang = (half_kpc * U.kpc / p.distance).to_value(
         U.dimensionless_unscaled) * U.rad
     npix = int(2 * np.ceil((half_ang / p.px_size).to_value(
         U.dimensionless_unscaled)))
-    return int(np.clip(npix + 4, 32, p.max_npix)), half_kpc
+    return int(np.clip(npix + 4, 32, max_npix)), half_kpc
 
 
 def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
@@ -197,5 +204,5 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
     out_fits = Path(out_fits)
     out_fits.parent.mkdir(parents=True, exist_ok=True)
     M.write_fits(str(out_fits), overwrite=True)
-    return CubeResult(fits=out_fits, npix=npix, signal=signal,
+    return CubeResult(fits=out_fits, npix=npix, half_kpc=half_kpc, signal=signal,
                       noise_rms=float(rms.value) if rms is not None else 0.0)

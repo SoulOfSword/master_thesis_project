@@ -16,6 +16,8 @@ from matplotlib.colors import BoundaryNorm
 from scipy import ndimage
 from astropy.io import fits
 
+from .barolo import rings_file
+
 # Computer Modern (the paper's LaTeX font) without needing a TeX install
 plt.rcParams.update({
     "font.family": "serif",
@@ -58,7 +60,12 @@ def _galaxy_mask(mom0, frac=0.03):
 
 
 def _rings(bb, distance_mpc=5.0):
-    """(rad_kpc, vrot, vdisp) from rings_final1.txt.
+    """(rad_kpc, vrot, vdisp) from the rings file barolo.rings_file picks.
+
+    With VSYS free that is rings_final2.txt: stage 2 fixes VSYS to the median of
+    the stage-1 rings and refits VROT/DISP. In rings_final1.txt every ring has
+    its own VSYS, which faint or one-sided outer rings cannot pin down, and a
+    wrong VSYS drags VROT with it.
 
     rad_kpc is rebuilt from RAD(arcs) (col 1) at the TRUE distance, not the
     RAD(Kpc) column 0 BBarolo writes: col 0 is wrong whenever DISTANCE was not
@@ -66,9 +73,7 @@ def _rings(bb, distance_mpc=5.0):
     instead of 5). Col 1 is distance-independent -> correct for fits already on
     disk. cols used: 1=arcs, 2=VROT, 3=DISP.
     """
-    f = bb / "rings_final1.txt"
-    if not f.exists():
-        return (np.zeros(0),) * 3
+    f = rings_file(bb)  # raises if the fit's rings file is missing
     rows = [r.split() for r in f.read_text().splitlines()
             if r.strip() and not r.startswith("#")]
     a = np.array([[float(c) for c in r[:4]] for r in rows if len(r) >= 4])

@@ -77,6 +77,9 @@ jobinfo <jobid>
 | `compute_{profiles,gamma,rcore}_disc.sbatch` | disc-catalog versions of the three stages        |
 | `run_mordor.sbatch`               | Full MORDOR pipeline — one node, 64 cores / 320 GB, 12 h    |
 | `recover_mordor.sbatch`           | Re-run stale MORDOR galaxies + rebuild samples              |
+| `compute_vcirc.sbatch`            | v_circ in the disc plane for a galaxy list (`GALAXIES` var, needs `--export=ALL`) |
+| `residual_split_all.sbatch`       | Residual figures (raw + floor-subtracted), all galaxies — 8 cores |
+| `asymmetry_all.sbatch`            | 3D asymmetry table + figures, all galaxies — 8 cores        |
 | `pipeline_density.sh`             | Submit the 5 density stages in sequence (uses `--wait`)     |
 | `pipeline_disc.sh`                | Submit the 5 disc stages in sequence (uses `--wait`)        |
 

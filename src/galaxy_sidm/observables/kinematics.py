@@ -26,6 +26,84 @@ def circular_velocity_from_mass(r, M_enc):
     return np.sqrt(G_CONST * M_enc / r)
 
 
+def vcirc_disc_plane(xyz, phi, zhat, r_edges, slab_half=0.3, n_azimuth=12,
+                     min_count=10):
+    """Circular velocity in the disc plane from the gravitational potential.
+
+    v_circ(R) = sqrt(R dPhi/dR), with Phi averaged azimuthally in cylindrical
+    rings over the particles in the slab |z| < slab_half about the plane
+    normal to `zhat`. Phi is averaged within `n_azimuth` sectors of each ring
+    first and then over the sectors that hold particles, so the densest parts
+    of a ring (arms, bar, clumps) do not dominate the mean.
+
+    Parameters
+    ----------
+    xyz : array, shape (N, 3)
+        Particle positions in kpc, centred on the galaxy.
+    phi : array, shape (N,)
+        Gravitational potential at the particles, physical (km/s)^2.
+    zhat : array, shape (3,)
+        Normal of the disc plane.
+    r_edges : array
+        Cylindrical radial ring edges in kpc.
+    slab_half : float
+        Slab half-thickness in kpc.
+    n_azimuth : int
+        Azimuthal sectors per ring.
+    min_count : int
+        Rings with fewer particles in the slab get nan.
+
+    Returns
+    -------
+    R : array
+        Mean cylindrical radius of the particles in each ring, kpc (nan for
+        rings with fewer than `min_count` particles).
+    v_circ : array
+        Circular velocity in km/s; nan where R is nan or dPhi/dR <= 0.
+    count : array
+        Particles of each ring inside the slab.
+    """
+    xyz = np.asarray(xyz, dtype=float)
+    phi = np.asarray(phi, dtype=float)
+    zhat = np.asarray(zhat, dtype=float) / np.linalg.norm(zhat)
+
+    z = xyz @ zhat # projection onto the normal
+    slab = np.abs(z) < slab_half # masks particles in the slab
+    xy = xyz[slab] - np.outer(z[slab], zhat) # projection onto the plane
+    R = np.linalg.norm(xy, axis=1) # cylindrical radius of the particles in the slab
+    e1 = np.cross(zhat, [1.0, 0.0, 0.0]) # in-plane axes for the azimuth
+    if np.linalg.norm(e1) < 1e-6: # zhat is along x, use y instead
+        e1 = np.cross(zhat, [0.0, 1.0, 0.0])
+    e1 /= np.linalg.norm(e1) # normalize
+    e2 = np.cross(zhat, e1) # second in-plane axis
+    theta = np.arctan2(xy @ e2, xy @ e1) # azimuth of the particles in the slab
+
+    n_r = len(r_edges) - 1
+    ir = np.digitize(R, r_edges) - 1
+    ia = np.minimum(((theta + np.pi) / (2 * np.pi) * n_azimuth).astype(int), n_azimuth - 1) # azimuthal sector of each particle
+    ok = (ir >= 0) & (ir < n_r) # masks particles in the correct rings and azimuthal sectors
+    cell = ir[ok] * n_azimuth + ia[ok] # unique cell index for each particle in the slab, used for binning
+    n_cell = np.bincount(cell, minlength=n_r * n_azimuth).reshape(n_r, n_azimuth) # number of particles in each ring and azimuthal sector
+    phi_sum = np.bincount(cell, weights=phi[slab][ok],
+                          minlength=n_r * n_azimuth).reshape(n_r, n_azimuth) # sum of potential in each ring and azimuthal sector
+    filled = n_cell > 0
+    sector_mean = np.divide(phi_sum, n_cell, out=np.zeros_like(phi_sum), where=filled)
+    n_sectors = filled.sum(axis=1)
+    phi_ring = np.divide(sector_mean.sum(axis=1), n_sectors,
+                         out=np.full(n_r, np.nan), where=n_sectors > 0)
+    count = n_cell.sum(axis=1) # number of particles in each ring inside the slab
+    R_ring = np.bincount(ir[ok], weights=R[ok], minlength=n_r) / np.maximum(count, 1) # mean cylindrical radius of the particles in each ring
+
+    good = np.flatnonzero(count >= min_count)
+    R_out = np.full(n_r, np.nan) # mean cylindrical radius of the particles in each ring, nan for rings with fewer than `min_count` particles
+    v_circ = np.full(n_r, np.nan) # circular velocity in km/s; nan where R is nan or dPhi/dR <= 0
+    R_out[good] = R_ring[good]
+    if len(good) >= 2:
+        v2 = R_ring[good] * np.gradient(phi_ring[good], R_ring[good])
+        v_circ[good] = np.sqrt(np.where(v2 > 0, v2, np.nan))
+    return R_out, v_circ, count
+
+
 
 def velocity_dispersion_3d(velocities, masses=None):
     """Compute 3D velocity dispersion.

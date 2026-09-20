@@ -1,7 +1,13 @@
 """Build the work list for the mock pipeline batch.
 
-One line per galaxy: <model> <snap> <sub_id>. Takes every MORDOR disc at
-all redshifts plus the non-discs at z>=4. Prints a per-bin tally.
+One line per galaxy: <model> <snap> <sub_id>. Takes every MORDOR disc
+(IsDisc == 1) at all redshifts. Prints a per-bin tally.
+
+Until 2026-09-19 the manifest also held the MORDOR non-discs at z >= 4 (155
+galaxies: 93 at z=4, 62 at z=5; 4237 lines in total, backed up as
+manifest_4237_with_highz_nondiscs.txt next to manifest.txt). Their cubes and
+BBarolo fits are still on disk. To bring them back, see the note at the
+selection below.
 """
 
 import sys
@@ -15,7 +21,6 @@ sys.path.insert(0, str(ROOT / "src"))
 from galaxy_sidm.io import load_config, load_flat
 
 MODELS = ["CDM", "SIDM1", "vSIDM"]
-HIGHZ = 4.0          # non-discs are kept only at z >= this
 
 
 def main():
@@ -27,7 +32,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
 
     lines = []
-    print(f"{'model':6s} {'snap':>4s} {'z':>4s} {'disc':>5s} {'nonZ':>5s}")
+    print(f"{'model':6s} {'snap':>4s} {'z':>4s} {'discs':>5s}")
     for model in MODELS:
         for snap, z in sorted(snap_z.items()):
             p = mdir / f"mordor_sample_{model}_{snap:03d}.hdf5"
@@ -37,12 +42,11 @@ def main():
             arrs, _ = load_flat(p)
             ids = np.asarray(arrs["halo_ids"], dtype=np.int64)
             isd = np.asarray(arrs["IsDisc"]).astype(int)
-            sel_disc = isd == 1
-            sel_nonz = (isd == 0) & (z >= HIGHZ)
-            for sid in ids[sel_disc | sel_nonz]:
+            # discs only. To add the non-discs at z >= 4 again, select
+            #   ids[(isd == 1) | ((isd == 0) & (z >= 4.0))]
+            for sid in ids[isd == 1]:
                 lines.append(f"{model} {snap} {int(sid)}")
-            print(f"{model:6s} {snap:>4d} {z:>4.1f} "
-                  f"{int(sel_disc.sum()):>5d} {int(sel_nonz.sum()):>5d}")
+            print(f"{model:6s} {snap:>4d} {z:>4.1f} {int((isd == 1).sum()):>5d}")
     out.write_text("\n".join(lines) + "\n")
     print(f"\n{len(lines)} galaxies -> {out}")
 

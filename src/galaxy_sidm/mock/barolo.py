@@ -1,9 +1,10 @@
 """Run BBarolo (3D tilted-ring fit) on a MARTINI cube.
 
-Rings one beam wide, inc and PA fixed to the injected values, zero
-thickness, AZIM norm, SEARCH mask (SNRCUT=3, GROWTHCUT=2), fitting VROT
-and VDISP only. Returns V, sigma, V/sigma from the rings, with V the mean
-of Vmax and Vflat.
+Rings one beam wide; inclination, position angle and centre fixed to the
+injected values (MARTINI puts the galaxy in the middle of the image); AZIM
+norm, SMOOTH&SEARCH mask (SNRCUT=5, GROWTHCUT=3), fitting VROT, VDISP and
+VSYS in two stages (stage 2 fixes VSYS to the median of the rings). Returns V,
+sigma, V/sigma from the rings, with V the mean of Vmax and Vflat.
 """
 
 import subprocess
@@ -28,24 +29,37 @@ class BaroloResult:
 
 @dataclass
 class MajorAxisExtent:
-    xpos: float          # fit centre [pix], as BBarolo writes/reads XPOS, YPOS
+    xpos: float          # centre [pix, 0-based like XPOS/YPOS]: middle of the map
     ypos: float
-    left_arcsec: float   # centre -> last non-NaN pixel, on each side
+    left_arcsec: float   # centre -> outer edge of the emission, on each side
     right_arcsec: float
+    left_at_edge: bool   # that edge is the map border: the emission may
+    right_at_edge: bool  # continue outside the cube
+    hole_arcsec: float   # centre -> first emission, nearer side (0: emission at the centre)
+
+
+def image_centre(nx, ny):
+    """Galaxy centre in 0-based pixels, BBarolo's XPOS/YPOS convention.
+
+    MARTINI puts the galaxy in the middle of the image. Do not take it from the
+    FITS WCS: the reference pixel of these cubes is not at the galaxy.
+    """
+    return (nx - 1) / 2.0, (ny - 1) / 2.0
 
 
 def major_axis_extent(bbarolo_dir):
     """How far the data velocity field reaches along the major axis.
 
     Uses BBarolo's DATA moment-1 map (maps/*_1mom.fits: the masked data, the
-    same whatever the number of rings fitted) and the fit centre from
-    rings_final1.txt. With PA = 90 deg the major axis is the map row through
-    the centre; on each side this returns the distance from the centre to the
-    last non-NaN pixel of the emission patch containing the centre, so isolated
-    noise specks elsewhere in the map do not count.
+    same whatever the rings or centre fitted), measured from the middle of the
+    map, where the galaxy is (image_centre). With PA = 90 deg the major axis is
+    the map row through the centre. On each side, walk out from the centre
+    along that row and stop at the first blank pixel, so gas beyond a gap does
+    not count even where it joins the disc elsewhere in the map. A blank centre
+    (a central hole) is stepped over: the walk starts at the first emission on
+    that side, and hole_arcsec is how far that is on the nearer side.
     """
     from astropy.io import fits
-    from scipy import ndimage
 
     bb = Path(bbarolo_dir)
     maps = [p for p in sorted((bb / "maps").glob("*_1mom.fits")) if "mod" not in p.name]
@@ -54,22 +68,23 @@ def major_axis_extent(bbarolo_dir):
     mom1 = np.squeeze(fits.getdata(maps[0])).astype(float)
     px_arcsec = abs(fits.getheader(maps[0])["CDELT1"]) * 3600.0
 
-    first_ring = next(line.split() for line in (bb / "rings_final1.txt").read_text().splitlines()
-                      if line.strip() and not line.startswith("#"))
-    xpos, ypos = float(first_ring[9]), float(first_ring[10])  # XPOS(pix) YPOS(pix)
-    x0 = int(np.clip(round(xpos), 0, mom1.shape[1] - 1))
-    y0 = int(np.clip(round(ypos), 0, mom1.shape[0] - 1))
+    xpos, ypos = image_centre(mom1.shape[1], mom1.shape[0])
+    x0, y0 = int(xpos), int(ypos)
 
-    patches, n = ndimage.label(np.isfinite(mom1))
-    patch = patches[y0, x0]
-    if patch == 0 and n > 0:  # centre pixel blank: use the biggest patch
-        patch = int(np.argmax(np.bincount(patches.ravel())[1:])) + 1
-    xs = np.flatnonzero(patches[y0] == patch) if patch else np.zeros(0, int)
-    if not len(xs):
-        return MajorAxisExtent(xpos, ypos, 0.0, 0.0)
-    return MajorAxisExtent(xpos, ypos,
-                           left_arcsec=float(max(0, x0 - xs.min()) * px_arcsec),
-                           right_arcsec=float(max(0, xs.max() - x0) * px_arcsec))
+    row = np.isfinite(mom1[y0])
+    edges, starts = [], []
+    for path in (row[x0::-1], row[x0:]):   # centre -> left border, centre -> right border
+        if not path.any():                 # no emission on this side
+            edges.append((0.0, False))
+            continue
+        start = int(np.argmax(path))       # first emission from the centre
+        gaps = np.flatnonzero(~path[start:])
+        last = start + int(gaps[0]) - 1 if len(gaps) else len(path) - 1
+        edges.append((last * px_arcsec, last == len(path) - 1))
+        starts.append(start * px_arcsec)
+    (left, left_edge), (right, right_edge) = edges
+    hole = min(starts) if starts else 0.0
+    return MajorAxisExtent(xpos, ypos, left, right, left_edge, right_edge, hole)
 
 
 def _vflat(vrot):
@@ -90,6 +105,7 @@ def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
     radsep = radsep_arcsec or beam_arcsec
     from astropy.io import fits
     hdr = fits.getheader(str(cube_fits))
+    xc, yc = image_centre(hdr["NAXIS1"], hdr["NAXIS2"])
     vsys = float(hdr.get("CRVAL3", 0.0)) # systemic velocity in the cube, in km/s (if CUNIT3 is m/s, convert it)
     if str(hdr.get("CUNIT3", "")).strip().lower() in ("m s-1", "m/s", "ms-1"):
         vsys /= 1000.0 # km/s
@@ -101,6 +117,8 @@ def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
         # fixed geometry
         f"INC         {inc_deg}",
         f"PA          {pa_deg}",
+        f"XPOS        {xc}",
+        f"YPOS        {yc}",
         *( [f"DISTANCE    {distance_mpc}"] if distance_mpc is not None else [] ),
         # f"NRADII       {nradii}",
         f"Z0          {radsep/6}",
@@ -128,8 +146,37 @@ def write_par(cube_fits, out_dir, inc_deg, pa_deg, beam_arcsec,
     return par
 
 
+def read_par(bbarolo_dir):
+    """<bbarolo_dir>/bbarolo.par as {KEY: value}, keys upper-case."""
+    par = {}
+    for line in (Path(bbarolo_dir) / "bbarolo.par").read_text().splitlines():
+        parts = line.split(None, 1)
+        if parts and not parts[0].startswith("#"):   # a later line overrides an earlier one
+            par[parts[0].upper()] = parts[1].strip() if len(parts) > 1 else ""
+    return par
+
+
+def rings_file(bbarolo_dir):
+    """The rings file holding the result of a BBarolo fit, as its bbarolo.par implies.
+
+    BBarolo runs a second stage only with TWOSTAGE true and a free geometric
+    parameter (here VSYS): stage 2 fixes it to the median of the rings, refits
+    VROT/DISP and writes rings_final2.txt. Otherwise the result is
+    rings_final1.txt. Raises FileNotFoundError if that file is missing, instead
+    of reading the other one.
+    """
+    bb = Path(bbarolo_dir)
+    par = read_par(bb)
+    free_geometry = set(par.get("FREE", "").lower().split()) & {"inc", "pa", "phi", "z0", "xpos", "ypos", "vsys"}
+    two_stage = par.get("TWOSTAGE", "false").lower() in ("true", "t", "yes", "1")
+    rf = bb / ("rings_final2.txt" if two_stage and free_geometry else "rings_final1.txt")
+    if not rf.exists():
+        raise FileNotFoundError(f"{rf} is missing: BBarolo did not write the rings file this fit should have")
+    return rf
+
+
 def _parse_rings(rings_txt):
-    """Read rings_final1.txt -> (rad_kpc, vrot, vdisp). Column order:
+    """Read a rings_final*.txt -> (rad_kpc, vrot, vdisp). Column order:
     RAD(Kpc) RAD(arcs) VROT DISP INC PA ..."""
     rows = []
     for line in Path(rings_txt).read_text().splitlines():
@@ -187,17 +234,17 @@ def run_bbarolo(cube_fits, out_dir, inc_deg=60.0, pa_deg=90.0,
             print(f"[run_bbarolo] BBarolo rc={proc.returncode}; "
                   f"retrying ({attempt + 1}/5)")
     ok = proc.returncode == 0
-    rings = sorted(out_dir.rglob("rings_final1.txt"))
     rad = vrot = vdisp = np.zeros(0)
     V = sigma = vsig = float("nan")
-    rings_txt = rings[0] if rings else (out_dir / "rings_final1.txt")
-    if rings and ok:
-        rad, vrot, vdisp = _parse_rings(rings[0])
+    rings_txt = None
+    if ok:
+        rings_txt = rings_file(out_dir)   # raises if BBarolo did not write it
+        rad, vrot, vdisp = _parse_rings(rings_txt)
     if len(vrot):
         V = 0.5 * (float(np.max(vrot)) + _vflat(vrot))
         sigma = float(np.mean(vdisp))
         vsig = V / sigma if sigma > 0 else float("nan")
-    if make_plots and rings and ok:
+    if make_plots and ok:
         _run_plotscripts(out_dir)
     return BaroloResult(
         out_dir=out_dir, rings_txt=rings_txt, rad_kpc=rad, vrot=vrot,

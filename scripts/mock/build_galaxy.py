@@ -17,11 +17,13 @@ sphviewer + cube outputs in place. Stages can be run separately: info.json is
 updated, not rewritten, and when a stage re-runs, the products and info.json
 entries of the stages after it are deleted (they belong to the old version).
 
-BBarolo fits: barolo_3rings fits the same 3 rings for every galaxy and gives the
-data moment-1 map and the centre; barolo (the final fit) reads that fit and uses
-as many one-beam rings as fit between the centre and the last non-NaN pixel of
-the moment-1 map along the major axis (farther side, rounded down), with the
-centre fixed to the first fit's.
+BBarolo fits (centre fixed at the middle of the cube, where MARTINI puts the
+galaxy): barolo_3rings fits the same 3 rings for every galaxy (moved out past a
+central hole when none of them holds emission) and gives the data moment-1 map;
+barolo (the final fit) uses as many one-beam rings as fit between
+the centre and the edge of that map along the major axis, walking out from the
+centre to the first gap (farther side, rounded down). info.json
+`extent_at_edge` [left, right] marks emission that runs into the cube border.
 
 Usage:
     python scripts/mock/build_galaxy.py --model CDM --snap 21 --sub-id 0 \
@@ -54,9 +56,10 @@ ALL_STAGES = ["sphview", "cube", "barolo_3rings", "barolo", "kinematics"]
 
 # what each stage writes: (files/dirs in the galaxy dir, info.json keys)
 STAGE_PRODUCTS = {
-    "cube": (["cube.fits"], ["cube_npix", "cube_signal", "cube_noise_rms", "reference_snr"]),
-    "barolo_3rings": (["bbarolo_3rings"], ["bbarolo_3rings_rc"]),
-    "barolo": (["bbarolo"], ["extent_arcsec", "fit_centre_px", "nradii",
+    "cube": (["cube.fits"], ["cube_npix", "cube_half_kpc", "cube_signal", "cube_noise_rms",
+                             "reference_snr"]),
+    "barolo_3rings": (["bbarolo_3rings"], ["bbarolo_3rings_rc", "bbarolo_3rings_hole_rings"]),
+    "barolo": (["bbarolo"], ["extent_arcsec", "extent_at_edge", "fit_centre_px", "nradii",
                              "V", "sigma", "V_over_sigma", "bbarolo_rc"]),
     "kinematics": (["kinematics.png"], []),
 }
@@ -150,6 +153,9 @@ def main():
                    help=f"Comma list from {ALL_STAGES} (default all)")
     p.add_argument("--base-path", type=Path, default=None,
                    help="Override simulation output/ dir")
+    p.add_argument("--half-kpc", type=float, default=None,
+                   help="Cube FOV half-width [kpc] instead of the stellar-r50 rule "
+                        "(a larger cube for a galaxy whose emission reaches the edge)")
     p.add_argument("--skip-existing", action="store_true",
                    help="Skip if kinematics.png + info.json already exist")
     args = p.parse_args()
@@ -203,7 +209,11 @@ def main():
         try:
             lbl = f"subID {args.sub_id}\nz={z:.2f}"
             if final_dir.exists():
-                vsig = ring_v_over_sigma(final_dir)
+                try:
+                    vsig = ring_v_over_sigma(final_dir)
+                except FileNotFoundError as e:
+                    print(f"[build_galaxy] no V/sigma for the label: {e}")
+                    vsig = float("nan")
                 if np.isfinite(vsig):
                     lbl += "\n" + rf"$V/\sigma={vsig:.2f}$"
             render_face_edge(gas, gal_dir / "galaxy_sphviewer.png",
@@ -218,13 +228,15 @@ def main():
             # same signal/noise for every galaxy; own noise realisation each
             ref_snr = load_reference_snr(CubeParams())
             res = build_cube(gas, cube_fits,
-                             CubeParams(reference_snr=ref_snr, noise_seed=args.sub_id),
+                             CubeParams(reference_snr=ref_snr, noise_seed=args.sub_id,
+                                        half_kpc=args.half_kpc),
                              ncpu=args.ncpu)
-            info.update({"cube_npix": int(res.npix), "cube_signal": res.signal,
+            info.update({"cube_npix": int(res.npix), "cube_half_kpc": res.half_kpc,
+                         "cube_signal": res.signal,
                          "cube_noise_rms": res.noise_rms, "reference_snr": ref_snr})
             clear_after("cube", gal_dir, info)  # old fits belong to the old cube
             cube_ok = True
-            print(f"[build_galaxy] cube ({res.npix}px, signal={res.signal:.3e} Jy/beam, "
+            print(f"[build_galaxy] cube ({res.npix}px, half-width {res.half_kpc:.1f} kpc, signal={res.signal:.3e} Jy/beam, "
                   f"noise_rms={res.noise_rms:.3e}) -> {cube_fits}")
         except Exception:
             print("[build_galaxy] cube FAILED:\n" + traceback.format_exc())
@@ -238,12 +250,24 @@ def main():
 
     if "barolo_3rings" in stages and cube_fits.exists() and cube_current:
         try:
-            # the same few rings for every galaxy -> data maps, mask and centre
+            # the same few rings for every galaxy -> data maps and mask
             shutil.rmtree(first_dir, ignore_errors=True)  # no stale products
             clear_after("barolo_3rings", gal_dir, info)   # final fit used the old one
             first = run_bbarolo(cube_fits, first_dir, nradii=FIRST_NRADII, **fit)
+            hole_rings = 0
+            if first.returncode == 0 and not len(first.vrot):
+                # no ring fitted: a central hole wider than the rings. Refit with the
+                # ring grid extended past the hole (BBarolo skips the empty inner
+                # rings), so 3 rings hold emission
+                hole_rings = int(major_axis_extent(first_dir).hole_arcsec // RING_ARCSEC)
+                if hole_rings:
+                    shutil.rmtree(first_dir)
+                    first = run_bbarolo(cube_fits, first_dir, nradii=hole_rings + FIRST_NRADII, **fit)
             info["bbarolo_3rings_rc"] = first.returncode
-            print(f"[build_galaxy] BBarolo {FIRST_NRADII} rings rc={first.returncode} -> {first_dir}")
+            info["bbarolo_3rings_hole_rings"] = hole_rings
+            after_hole = f" after {hole_rings} ring(s) of central hole" if hole_rings else ""
+            print(f"[build_galaxy] BBarolo {FIRST_NRADII} rings{after_hole} rc={first.returncode} "
+                  f"({len(first.vrot)} fitted) -> {first_dir}")
         except Exception:
             print("[build_galaxy] barolo_3rings FAILED:\n" + traceback.format_exc())
 
@@ -253,20 +277,21 @@ def main():
             if info.get("bbarolo_3rings_rc") != 0 or not first_dir.is_dir():
                 raise RuntimeError(f"needs a successful {FIRST_NRADII}-ring fit in "
                                    f"{first_dir} (stage barolo_3rings)")
-            # rings out to the last non-NaN pixel of the velocity field along
-            # the major axis (farther side, rounded down), same centre
+            # rings out to the edge of the velocity field along the major axis,
+            # walking from the cube centre to the first gap (farther side,
+            # rounded down)
             ext = major_axis_extent(first_dir)
             nradii = max(1, int(max(ext.left_arcsec, ext.right_arcsec) // RING_ARCSEC))
             info.update({"extent_arcsec": [ext.left_arcsec, ext.right_arcsec],
+                         "extent_at_edge": [ext.left_at_edge, ext.right_at_edge],
                          "fit_centre_px": [ext.xpos, ext.ypos], "nradii": nradii})
+            at_edge = " (reaches the cube edge)" if ext.left_at_edge or ext.right_at_edge else ""
             print(f"[build_galaxy] extent left/right = {ext.left_arcsec:.0f}\"/"
-                  f"{ext.right_arcsec:.0f}\" -> NRADII={nradii}")
+                  f"{ext.right_arcsec:.0f}\"{at_edge} -> NRADII={nradii}")
 
             shutil.rmtree(final_dir, ignore_errors=True)
             clear_after("barolo", gal_dir, info)  # kinematics.png showed the old fit
-            res = run_bbarolo(cube_fits, final_dir, nradii=nradii,
-                              extra=[f"XPOS        {ext.xpos}", f"YPOS        {ext.ypos}"],
-                              **fit)
+            res = run_bbarolo(cube_fits, final_dir, nradii=nradii, **fit)
             if res.returncode == 0:
                 V, sigma, vsig = ring_kinematics(final_dir)
             else:

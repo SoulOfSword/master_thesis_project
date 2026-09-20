@@ -3,8 +3,9 @@
 2x3 mosaic (one panel per pipeline redshift, z = 5 -> 0.5): log10 v_flat vs
 log10 Mstar for the usable MORDOR discs. The sample comes from
 galaxy_sidm.mock.tables.assemble -- IsDisc==1, bbarolo_rc==0, not hand-flagged
-in config/problematic_discs.yaml -- and v_flat is the mean of the outermost N
-ring VROT (default 3). Colours follow config model_colors (CDM black, SIDM1
+in config/problematic_discs.yaml -- and v_flat follows SPARC (the outermost rings
+flat within 5%, see tables.v_flat; curves that are not flat are left out).
+Colours follow config model_colors (CDM black, SIDM1
 blue, vSIDM red). An OLS power-law fit log v = a + b log M is drawn per model;
 slope / intercept / vertical scatter / N are printed.
 
@@ -14,7 +15,7 @@ broken on Leonardo), large labels/ticks/markers, inward ticks on all sides.
 Usage:
   python scripts/plots/scaling/plot_tfr.py               # stellar TFR
   python scripts/plots/scaling/plot_tfr.py --baryonic    # Mstar + M_neutral
-  python scripts/plots/scaling/plot_tfr.py --n-outer 4
+  python scripts/plots/scaling/plot_tfr.py --flat-tol 0.1
 """
 
 import argparse
@@ -66,8 +67,8 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--baryonic", action="store_true",
                    help="Use Mbar = Mstar + M_neutral instead of Mstar.")
-    p.add_argument("--n-outer", type=int, default=3,
-                   help="Outermost rings averaged for v_flat (default 3).")
+    p.add_argument("--flat-tol", type=float, default=0.05,
+                   help="Flatness tolerance of the SPARC v_flat rule (default 0.05).")
     p.add_argument("--exclude", type=Path,
                    default=ROOT / "config" / "problematic_discs.yaml")
     p.add_argument("--outdir", type=Path, default=ROOT / "figures" / "tfr")
@@ -75,7 +76,8 @@ def main():
 
     cfg = load_config(None)
     colors = cfg["model_colors"]
-    rows = assemble(cfg, exclude_yaml=args.exclude, n_outer=args.n_outer)
+    rows = assemble(cfg, exclude_yaml=args.exclude, flat_tol=args.flat_tol)
+    n_not_flat = sum(not np.isfinite(r["v_flat"]) for r in rows)
     rows = [r for r in rows
             if np.isfinite(r["v_flat"]) and r["v_flat"] > 0 and r["Mstar"] > 0]
     if not rows:
@@ -94,7 +96,8 @@ def main():
     zs = sorted({r["z"] for r in rows}, reverse=True)
     fig, axes = plt.subplots(2, 3, figsize=(16, 10), sharex=True, sharey=True,
                              constrained_layout=True)
-    print(f"\nTFR ({tag}), v_flat = mean of last {args.n_outer} rings")
+    print(f"\nTFR ({tag}), v_flat = SPARC rule (outer rings flat within {100 * args.flat_tol:g}%); "
+          f"{n_not_flat} discs without a flat outer curve left out")
     print(f"{'z':>5} {'model':6s} {'slope':>6} {'icpt':>7} {'scatter':>8} {'N':>5}")
     for ax, z in zip(axes.flat, zs):
         for model in MODELS:
