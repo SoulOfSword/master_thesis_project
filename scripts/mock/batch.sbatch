@@ -33,6 +33,13 @@ CHUNK="${CHUNK:-10}"
 # For now everything up to the 3-ring fit; the final fit later with
 #   STAGES=barolo,kinematics sbatch scripts/mock/batch.sbatch
 STAGES="${STAGES:-sphview,cube,barolo_3rings}"
+# GROW_FOV=1 (with STAGES=cube,barolo_3rings): build_galaxy.py --grow-fov keeps doubling
+# each cube until its emission no longer reaches the border along the major axis.
+# scripts/mock/make_fov_manifest.py prints the full command.
+GROW_FOV="${GROW_FOV:-}"
+# BBAROLO_TIMEOUT=<seconds>: stop a BBarolo run after this long (build_galaxy.py's default is
+# 5400 = 1.5 h). Raise it, together with a longer --time, for the largest cubes.
+BBAROLO_TIMEOUT="${BBAROLO_TIMEOUT:-}"
 cd "$PROJ"
 
 start=$(( SLURM_ARRAY_TASK_ID * CHUNK + 1 ))
@@ -46,7 +53,7 @@ sed -n "${start},${end}p" "$MANIFEST" | while read -r model snap sub half; do
     echo "--- $(date +%T) $model snap=$snap sub=$sub${half:+ half_kpc=$half} ---"
     python3 -u scripts/mock/build_galaxy.py \
         --model "$model" --snap "$snap" --sub-id "$sub" \
-        --ncpu "$SLURM_CPUS_PER_TASK" --stages "$STAGES" ${half:+--half-kpc "$half"} \
+        --ncpu "$SLURM_CPUS_PER_TASK" --stages "$STAGES" ${half:+--half-kpc "$half"} ${GROW_FOV:+--grow-fov} ${BBAROLO_TIMEOUT:+--bbarolo-timeout "$BBAROLO_TIMEOUT"} \
         || echo "!!! FAILED $model snap=$snap sub=$sub rc=$?"
 done
 echo "[$(date +%F_%T)] task=$SLURM_ARRAY_TASK_ID DONE"

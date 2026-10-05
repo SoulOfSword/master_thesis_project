@@ -2,12 +2,15 @@
 
     A = sum |I(i,j,k) - I(-i,-j,-k)| / sum |I(i,j,k) + I(-i,-j,-k)|
 
-over BBarolo's symmetrised mask, with the pairs taken about the cube centre and the
-central channel of BBarolo's VSYS (galaxy_sidm.mock.asymmetry). Two versions:
+over the 3-ring fit's symmetrised mask, with the pairs taken about the cube centre and
+the central channel of the final fit's VSYS (galaxy_sidm.mock.asymmetry). Two versions:
 
     A        as He+2026 define it
     A_corr   A - A_noise, where A_noise is what a perfectly symmetric galaxy gets
              from the noise alone
+
+The table also holds the squared asymmetry of Deg+2023 (A_sq, see the module), not
+plotted here.
 
 He+2026 call a galaxy asymmetric above A = 0.35 (dashed line). The dotted line is the
 midpoint between the highest calibration disc and the lowest perturbed galaxy (when
@@ -22,9 +25,9 @@ Modes:
   --calibration-only   only the galaxies of --labels -> asymmetry_split.pdf
   --from-table         both figures again from the saved table, without reading cubes
 
-Galaxies whose final fit found no gas on the major axis (extent_arcsec [0, 0]), or
-that have no usable fit, get no A; they are printed with the reason, which also goes
-in the table's 'skipped' column.
+Galaxies without a final fit (no counted emission along the major axis), or with an
+unusable fit, get no A; they are printed with the reason, which also goes in the
+table's 'skipped' column.
 
 Usage:
   python scripts/plots/disc_quality/plot_asymmetry.py --calibration-only
@@ -34,7 +37,6 @@ Usage:
 
 import argparse
 import csv
-import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -51,6 +53,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config
 from galaxy_sidm.mock.asymmetry import HE26_THRESHOLD, asymmetry_3d
+from galaxy_sidm.mock.residuals import has_final_fit
 
 plt.rcParams.update({
     # paper font: bundled Computer Modern (cmr10) -- do NOT use usetex here
@@ -80,7 +83,7 @@ YLABELS = {"A": r"$A$", "A_corr": r"$A-A_{\rm noise}$"}
 # the definitions, above the panels (I' = I_{-i,-j,-k}, N = voxels in the mask)
 PANEL_TITLES = {"A": r"$A=\sum|I_{i,j,k}-I'|\,/\,\sum|I_{i,j,k}+I'|,\quad I'=I_{-i,-j,-k}$",
                 "A_corr": r"$A_{\rm noise}=(2/\sqrt{\pi})\,\sigma N\,/\,\sum|I_{i,j,k}+I'|$"}
-FIELDS = ("model", "z", "subID", "A", "A_noise", "A_corr", "n_voxels",
+FIELDS = ("model", "z", "subID", "A", "A_noise", "A_corr", "A_sq", "n_voxels",
           "central_channel", "vsys", "skipped")
 
 
@@ -89,9 +92,8 @@ def _measure(mart, model, z, sub):
     g = mart / f"z{z:g}" / model / f"gal_{sub:06d}"
     row = dict(model=model, z=z, subID=sub, skipped="")
     try:
-        ext = json.loads((g / "info.json").read_text()).get("extent_arcsec")
-        if ext is not None and max(ext) == 0:
-            row["skipped"] = "no gas on the major axis (extent_arcsec 0)"
+        if not has_final_fit(g):
+            row["skipped"] = "no final fit (no counted emission along the major axis)"
             return row
         row.update(asdict(asymmetry_3d(g)))
     except (OSError, ValueError, KeyError) as e:
@@ -118,8 +120,9 @@ def _read_table(path):
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
             r["z"], r["subID"] = float(r["z"]), int(r["subID"])
-            for k in ("A", "A_noise", "A_corr", "central_channel", "vsys"):
-                r[k] = float(r[k]) if r[k] else float("nan")
+            for k in ("A", "A_noise", "A_corr", "A_sq", "central_channel", "vsys"):
+                if k in r:      # tables written before 2026-09-21 have no A_sq
+                    r[k] = float(r[k]) if r[k] else float("nan")
             r["n_voxels"] = int(r["n_voxels"]) if r["n_voxels"] else 0
             rows.append(r)
     return rows
@@ -288,14 +291,15 @@ def main():
              for cls in CLASSES}
 
     print(f"\ncalibration {model} {zkey}")
-    print(f"{'class':13s} {'subID':>7} {'A':>7} {'A_noise':>8} {'A_corr':>7} {'voxels':>8} {'central ch':>10}")
+    print(f"{'class':13s} {'subID':>7} {'A':>7} {'A_noise':>8} {'A_corr':>7} {'A_sq':>7} "
+          f"{'voxels':>8} {'central ch':>10}")
     for cls in CLASSES:
         for r in calib[cls]:
             if r["skipped"]:
                 print(f"{cls:13s} {r['subID']:>7d}   no A: {r['skipped']}")
             else:
                 print(f"{cls:13s} {r['subID']:>7d} {r['A']:7.3f} {r['A_noise']:8.3f} {r['A_corr']:7.3f} "
-                      f"{r['n_voxels']:8d} {r['central_channel']:10.1f}")
+                      f"{r.get('A_sq', float('nan')):7.4f} {r['n_voxels']:8d} {r['central_channel']:10.1f}")
 
     _figure_split(calib, rf"3D asymmetry  ({model}, $z={z:g}$)", args.outdir / "asymmetry_split.pdf")
     if not args.calibration_only:

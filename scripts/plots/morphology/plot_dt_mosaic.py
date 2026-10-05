@@ -3,7 +3,7 @@
 For each (snap in `cfg['mosaic_snaps']`, model in `cfg['models']`), reads
 the mordor_sample HDF5 produced by `scripts/data/build_mordor_sample.py`
 and plots the binned fraction of disc galaxies (IsDisc == 1) with
-Wilson 95% CI errorbars.
+Wilson 1-sigma (68.3%) errorbars.
 
 Bins are **shared per panel**: within each redshift panel, log M_star
 from all models is pooled to define a common grid. Where galaxies are
@@ -12,7 +12,7 @@ panels are unchanged); only when a panel is too sparse to fill that grid
 (fewer than ~`--n-target` galaxies per model per bin) does it widen to
 fewer uniform bins, so high-z panels show a few well-populated points
 instead of many empty ones. The disc fraction is computed per model in
-those shared bins, with Wilson 95% CI errorbars clipped to non-negative
+those shared bins, with Wilson 1-sigma errorbars clipped to non-negative
 by `disc_fraction_binned`.
 Missing (model, snap) combos are skipped with a printed MISSING line.
 

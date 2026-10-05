@@ -22,6 +22,11 @@ Three modes:
                leads the page title. Default output
                figures/pvs/calibration/pv_calibration.pdf.
 
+  --mode list: the galaxies of --list, a text file of "model z subID [label]"
+               lines ('#' lines are comments), one page each in file order; the
+               label, if any, leads the page title. Default output: the list file
+               with a .pdf suffix.
+
 In modes all and bins only MORDOR discs (IsDisc==1) are used. Galaxies without a
 MOCK_pv_azim.pdf are skipped and tallied. Each page title carries
     model | z | subID | logMstar | NRADII  (ring count from the rings file)
@@ -35,6 +40,7 @@ Usage:
   python scripts/mock/collate_pv.py --out /path/review.pdf
   python scripts/mock/collate_pv.py --exclude config/problematic_discs.yaml  # gas-discs only
   python scripts/mock/collate_pv.py --mode calibration    # residual_calibration.yaml galaxies
+  python scripts/mock/collate_pv.py --mode list --list ~/tmp/pv_few_rings.txt  # -> ~/tmp/pv_few_rings.pdf
 """
 
 import argparse
@@ -133,10 +139,12 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", choices=["all", "bins", "calibration"], default="all")
+    p.add_argument("--mode", choices=["all", "bins", "calibration", "list"], default="all")
     p.add_argument("--labels", type=Path,
                    default=ROOT / "config" / "residual_calibration.yaml",
                    help="calibration galaxies for --mode calibration")
+    p.add_argument("--list", type=Path, default=None,
+                   help="for --mode list: file of 'model z subID [label]' lines")
     p.add_argument("--model", default="SIDM1",
                    choices=["CDM", "SIDM1", "vSIDM", "WDM3", "WDM5"])
     p.add_argument("--snap", type=int, default=21,
@@ -154,8 +162,12 @@ def main():
     snap_z = {int(k): float(v) for k, v in cfg["snap_z"].items()}
     mart, mdir = _paths(cfg)
 
+    if args.mode == "list" and args.list is None:
+        p.error("--mode list needs --list FILE")
     if args.out is None and args.mode == "calibration":
         args.out = ROOT / "figures" / "pvs" / "calibration" / "pv_calibration.pdf"
+    if args.out is None and args.mode == "list":
+        args.out = args.list.with_suffix(".pdf")
     if args.out is None:
         subdir = "gas_discs" if args.exclude else "all"
         tag = "gasdiscs" if args.exclude else "all"
@@ -207,6 +219,26 @@ def main():
                             included += 1
                         else:
                             skipped += 1
+    elif args.mode == "list":
+        z_snap = {z: s for s, z in snap_z.items()}
+        for line in args.list.read_text().splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            model, zs, sub, *label = line.split()
+            z = float(zs)
+            pv = _pv_pdf(mart, model, z_snap[z], snap_z, int(sub))
+            if not pv.exists():
+                print(f"  missing {pv}")
+                skipped += 1
+                continue
+            info = json.loads((pv.parent.parent / "info.json").read_text())
+            lm = f"{np.log10(info['Mstar']):.2f}" if info.get("Mstar") else "?"
+            title = ((" ".join(label) + " | ") if label else "") + (
+                f"{model} | z={z:g} | subID {sub} | logM*={lm} | NRADII={_nrings(pv)}")
+            if _add_page(out, pv, title):
+                included += 1
+            else:
+                skipped += 1
     else:  # bins: one representative per (snap, mass bin)
         edges = args.mass_edges
         # adjacent [lo,hi) bins, plus an open-ended top bin so the most

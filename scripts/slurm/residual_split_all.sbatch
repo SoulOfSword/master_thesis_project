@@ -9,7 +9,7 @@
 #SBATCH --mail-user=costa@astro.rug.nl
 #SBATCH --output=/scratch/s4636708/aida/derived/logs/slurm/residuals_all_%j.out
 #
-# Residual plots, raw and noise-floor-subtracted, of every galaxy (PV and cube: the
+# Residual plots (per voxel, noise removed) of every galaxy (PV and cube: the
 # cube version reads every full cube, too heavy for the login node) and of the
 # calibration galaxies. Takes no variables, so no --export=ALL needed:
 #   sbatch scripts/slurm/residual_split_all.sbatch

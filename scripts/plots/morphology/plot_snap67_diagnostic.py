@@ -2,7 +2,7 @@
 
 Three panels at one snap (default 67, z~0.5):
   1. Sample histogram: log10(M_star) per model.
-  2. Disc fraction vs log M_star with Wilson 95% CI errorbars; shared
+  2. Disc fraction vs log M_star with Wilson 1-sigma (68.3%) errorbars; shared
      bins pooled across models within the panel; yerr clipped to >=0.
   3. M_thin / M_star histogram per galaxy, weighted by 1/N.
 

@@ -22,6 +22,8 @@ dependencies = [
     "requests",      # API access for TNG
     "astropy",       # Units, cosmology, coordinates
     "tqdm",          # Progress bars (scripts/run_mordor.py orchestrator)
+    "scikit-learn",
+    "statsmodels",
 ]
 
 [project.optional-dependencies]

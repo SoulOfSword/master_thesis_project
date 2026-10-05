@@ -1,37 +1,37 @@
-"""Global data-model residuals of the BBarolo fits.
+"""Data-model residuals of the BBarolo final fits.
 
-Three statistics per galaxy (i, j = pixel and
-channel; element-wise data - model, then sum):
+Two statistics per galaxy, per voxel and with the noise taken out (i = voxel):
 
-    res1 = sum_ij (D_ij - M_ij)^2 / sigma^2      (chi^2)
-    res2 = sum_ij |D_ij - M_ij|   / sigma        (chi)
-    res3 = sum_ij |D_ij - M_ij| / sum_ij |D_ij|  (fraction of signal unexplained)
+    res1 = sum_V (D_i - M_i)^2 / sigma^2 / N_V  -  1
+    res2 = sum_V |D_i - M_i|   / sigma   / N_V  -  sqrt(2/pi)
+
+summed over the voxels V where there is gas or model, N_V of them:
+
+  * inside the final fit's mask (bbarolo/mask.fits, the 3-ring fit's mask with the
+    hole rings cut out, i.e. the voxels the final fit itself used); it still includes
+    the gas beyond the last ring, where the final model is empty;
+  * or where the final model is brighter than MODEL_CUT sigma: model gas where the
+    data has none counts too.
+
+Noise: where the model is right, D - M is Gaussian noise, whose square averages
+sigma^2 and whose absolute value averages sqrt(2/pi) sigma = 0.798 sigma. So a
+perfect fit gives res1 = res2 = 0 (slightly below or above, from the noise itself),
+whatever the size of the cube or of the galaxy.
 
 Computed for two data/model pairs:
 
-  * CUBE:  <gal>/cube.fits  vs  <gal>/bbarolo/MOCKmod_azim.fits
-  * PV  :  <gal>/bbarolo/pvs/MOCK_pv_a.fits  vs  MOCKmod_pv_a_azim.fits
-           (major-axis position-velocity slice, the one judged by eye)
+  * CUBE: <gal>/cube.fits vs <gal>/bbarolo/MOCKmod_azim.fits,
+          mask <gal>/bbarolo/mask.fits
+  * PV:   <gal>/bbarolo/pvs/MOCK_pv_a.fits vs MOCKmod_pv_a_azim.fits (the major-axis
+          position-velocity slice), mask <gal>/bbarolo/pvs/MOCKmask_pv_a.fits
 
 sigma is the noise of the cube, the standard deviation of its first and last 3
 channels (no emission there), for the PV too: the PV noise is the cube noise, and
 the PV's own 6 end rows (6 x npix pixels) give a sigma off by ~5% per galaxy (up
 to 14%), against 1.5% (138-px cubes) to 0.35% (>= 400 px) from the cube.
 
-Noise floor. Where the model is right -- which includes everything outside the
-galaxy, where the model is 0 -- D - M is Gaussian noise: |noise| averages
-sqrt(2/pi) sigma = 0.798 sigma and noise^2 averages sigma^2. Summed over the N
-elements of the array (PV: 64 channels x npix positions; cube: 64 x npix x npix),
-a perfect fit still gives res1 = N and res2 = 0.798 N, set by the cube size alone.
-So each function returns the floor-subtracted versions as well:
-
-    res1 - N
-    res2 - 0.798 N
-    (sum |D-M| - 0.798 sigma N) / (sum |D| - 0.798 sigma N)   (floor out of both sums)
-
-i.e. the residual in excess of pure noise: 0 for a perfect fit (res3 still 1 for
-an empty model). The noise itself scatters them around that (res2 by ~ +-150 for
-a 138-px PV), so a near-perfect fit can come out slightly negative.
+Galaxies without a final fit (no counted emission along the major axis, see
+barolo.pv_rings) get NaN.
 """
 
 from pathlib import Path
@@ -41,18 +41,8 @@ from astropy.io import fits
 
 N_EDGE = 3                       # line-free channels at each end of the velocity axis
 MEAN_ABS = np.sqrt(2 / np.pi)    # <|noise|> / sigma of Gaussian noise
-NAN3 = (float("nan"), float("nan"), float("nan"))
-
-
-def _load(path):
-    """(FITS data as a float array with NaNs zeroed, number of non-NaN values);
-    (None, 0) if unreadable."""
-    try:
-        a = np.array(fits.getdata(path), dtype=float)
-    except Exception:
-        return None, 0
-    n = int(np.isfinite(a).sum())
-    return np.nan_to_num(a, copy=False), n
+MODEL_CUT = 1.0                  # model voxels above this many sigma count, also outside the mask
+NAN2 = (float("nan"), float("nan"))
 
 
 def _edge_std(cube):
@@ -70,43 +60,57 @@ def cube_noise(gal_dir):
         return float("nan")
 
 
-def _residuals(data, model, sigma, n):
-    """(raw, floor-subtracted), each (res1, res2, res3), over the full arrays.
+def has_final_fit(gal_dir):
+    """True if the galaxy has a final BBarolo model. Without one, the final fit found
+    no counted emission along the major axis and was not run."""
+    return (Path(gal_dir) / "bbarolo" / "MOCKmod_azim.fits").exists()
 
-    n: number of data elements holding noise (the non-NaN ones).
+
+def _residuals(data_file, model_file, mask_file, sigma):
+    """(res1, res2) of data vs model over the voxels inside the mask or where the model
+    is above MODEL_CUT sigma (see the module doc).
+
+    The files are read one channel (cube) or one velocity row (PV) at a time, so a
+    large cube never sits in memory several times over.
     """
-    if data is None or model is None or data.shape != model.shape:
-        return NAN3, NAN3
     if not np.isfinite(sigma) or sigma <= 0:
-        return NAN3, NAN3
-    diff = data - model
-    abs_sum = float(np.sum(np.abs(diff)))
-    sq_sum = float(np.sum(diff ** 2))
-    flux = float(np.sum(np.abs(data)))
-    floor = MEAN_ABS * sigma * n         # sum of |noise| over the array
-    raw = (sq_sum / sigma ** 2,
-           abs_sum / sigma,
-           abs_sum / flux if flux > 0 else float("nan"))
-    sub = (sq_sum / sigma ** 2 - n,
-           (abs_sum - floor) / sigma,
-           (abs_sum - floor) / (flux - floor) if flux > floor else float("nan"))
-    return raw, sub
+        raise ValueError(f"no usable noise for {data_file}: sigma = {sigma}")
+    with fits.open(data_file, memmap=True) as hd, fits.open(model_file, memmap=True) as hm, \
+            fits.open(mask_file, memmap=True) as hk:
+        data, model, mask = (np.squeeze(h[0].data) for h in (hd, hm, hk))
+        if not data.shape == model.shape == mask.shape:
+            raise ValueError(f"data {data.shape}, model {model.shape} and mask {mask.shape} "
+                             f"differ ({data_file})")
+        n, sq_sum, abs_sum = 0, 0.0, 0.0
+        for k in range(data.shape[0]):
+            D = np.asarray(data[k], dtype=float)
+            M = np.nan_to_num(np.asarray(model[k], dtype=float))
+            K = np.nan_to_num(np.asarray(mask[k], dtype=float))
+            use = np.isfinite(D) & ((K != 0) | (M > MODEL_CUT * sigma))
+            d = (D[use] - M[use]) / sigma
+            n += int(use.sum())
+            sq_sum += float(np.sum(d ** 2))
+            abs_sum += float(np.sum(np.abs(d)))
+    if n == 0:
+        return NAN2
+    return float(sq_sum / n - 1), float(abs_sum / n - MEAN_ABS)
 
 
 def cube_residuals(gal_dir):
-    """MARTINI cube vs the BBarolo model cube: (raw, floor-subtracted), each (res1, res2, res3)."""
+    """(res1, res2) of the MARTINI cube vs the final BBarolo model cube; NaN without a final fit."""
     g = Path(gal_dir)
-    cube, n = _load(g / "cube.fits")
-    model, _ = _load(g / "bbarolo" / "MOCKmod_azim.fits")
-    sigma = _edge_std(cube) if cube is not None else float("nan")
-    return _residuals(cube, model, sigma, n)
+    if not has_final_fit(g):
+        return NAN2
+    return _residuals(g / "cube.fits", g / "bbarolo" / "MOCKmod_azim.fits",
+                      g / "bbarolo" / "mask.fits", cube_noise(g))
 
 
 def pv_residuals(gal_dir):
-    """Major-axis PV, data vs BBarolo model, with the cube's sigma:
-    (raw, floor-subtracted), each (res1, res2, res3)."""
+    """(res1, res2) of the major-axis PV, data vs final BBarolo model, with the cube's sigma;
+    NaN without a final fit."""
     g = Path(gal_dir)
+    if not has_final_fit(g):
+        return NAN2
     pvs = g / "bbarolo" / "pvs"
-    data, n = _load(pvs / "MOCK_pv_a.fits")
-    model, _ = _load(pvs / "MOCKmod_pv_a_azim.fits")
-    return _residuals(data, model, cube_noise(g), n)
+    return _residuals(pvs / "MOCK_pv_a.fits", pvs / "MOCKmod_pv_a_azim.fits",
+                      pvs / "MOCKmask_pv_a.fits", cube_noise(g))

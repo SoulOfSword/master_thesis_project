@@ -13,9 +13,11 @@ emission on one side only.
   * central channel (He+2026): the channel nearest to BBarolo's VSYS (rings file) if
     VSYS lies within 1/3 of a channel width of it; otherwise both nearest channels
     are central, and the reflection is about the point between them.
-  * mask: BBarolo's mask.fits (1 = emission, from MASK SEARCH), made symmetric: a
-    pair is in when either of its voxels is (He+2026). With BBarolo's mask as it is,
-    a feature on one side only would enter the sum without its empty mirror.
+  * mask: the mask.fits of the 3-ring fit (bbarolo_3rings; 1 = emission, from BBarolo's
+    SMOOTH&SEARCH), made symmetric: a pair is in when either of its voxels is (He+2026).
+    With the mask as it is, a feature on one side only would enter the sum without its
+    empty mirror. The 3-ring fit's mask, not the final fit's: the final fit's mask has
+    the hole rings cut out, and the gas in them should count.
 
 Noise: where the galaxy is symmetric, I - I' is pure noise, and |noise1 - noise2|
 averages 2 sigma / sqrt(pi) (sigma: the cube noise, residuals.cube_noise). Summed
@@ -26,6 +28,18 @@ over the N voxels of the mask, a perfectly symmetric galaxy therefore still gets
 and A_corr = A - A_noise removes it. That is exact for symmetric emission and
 slightly over-corrects strongly asymmetric voxels, whose |I - I'| has no noise bias.
 He+2026 call a galaxy asymmetric above A = 0.35.
+
+Squared version (Deg et al. 2023, MNRAS 523, 4340), from the same voxel pairs:
+
+    A_sq = (sum (I - I')^2 - 2 N sigma^2) / (sum (I + I')^2 - 2 N sigma^2)
+
+With I = S + n, the noise adds exactly 2 sigma^2 to the mean of every (I - I')^2 and
+(I + I')^2, whatever the galaxy does there (the cross term 2 (S - S')(n - n') averages
+to zero), so subtracting 2 N sigma^2 is right at any asymmetry and S/N. |I - I'| has
+no such split: the noise adds 2 sigma / sqrt(pi) to it where S = S', but nothing
+where |S - S'| >> sigma, so the constant A_noise is right only for symmetric
+emission. Deg+2023 quote sqrt(A_sq), which is on the scale of A. A_sq < 0 when the
+noise accounts for all of sum (I - I')^2; Deg+2023 set A = -1 there.
 """
 
 from dataclasses import dataclass
@@ -46,6 +60,7 @@ class Asymmetry:
     A: float                 # 3D asymmetry
     A_noise: float           # part of A a perfectly symmetric galaxy gets from the noise
     A_corr: float            # A - A_noise
+    A_sq: float              # squared asymmetry with the noise taken out (Deg+2023)
     n_voxels: int            # voxels in the symmetric mask
     central_channel: float   # 0-based; x.5 = two central channels
     vsys: float              # km/s, from the BBarolo fit
@@ -83,14 +98,20 @@ def central_channel(vsys, header):
     return float(lo + 0.5)
 
 
-def asymmetry_3d(gal_dir):
-    """He+2026 3D asymmetry of <gal>/cube.fits in BBarolo's symmetrised mask (see module doc)."""
+def asymmetry_3d(gal_dir, cube=None, sigma=None):
+    """He+2026 3D asymmetry of <gal>/cube.fits in the 3-ring fit's symmetrised mask (see module doc).
+
+    cube: measure this cube instead, a FITS file or an array on the same grid (e.g. a
+    noiseless twin of cube.fits), in the same mask and about the same centre and central
+    channel. sigma: its noise (0 for a noiseless cube); default: the noise of cube.fits.
+    """
     g = Path(gal_dir)
     bb = g / "bbarolo"
-    with fits.open(g / "cube.fits") as h:
-        cube = np.nan_to_num(np.array(h[0].data, dtype=float), copy=False)
-        header = h[0].header
-    mask = fits.getdata(bb / "mask.fits") != 0
+    header = fits.getheader(g / "cube.fits")
+    if cube is None or isinstance(cube, (str, Path)):
+        cube = fits.getdata(cube or g / "cube.fits")
+    cube = np.nan_to_num(np.array(cube, dtype=float), copy=False)
+    mask = fits.getdata(g / "bbarolo_3rings" / "mask.fits") != 0
     if mask.shape != cube.shape:
         raise ValueError(f"{g}: mask {mask.shape} and cube {cube.shape} differ")
     nch, ny, nx = cube.shape
@@ -105,7 +126,7 @@ def asymmetry_3d(gal_dir):
 
     k, y, x = np.nonzero(mask)
     if len(k) == 0:
-        return Asymmetry(np.nan, np.nan, np.nan, 0, kc, vsys)
+        return Asymmetry(np.nan, np.nan, np.nan, np.nan, 0, kc, vsys)
     if ((K - k < 0) | (K - k >= nch)).any():
         raise ValueError(f"{g}: emission whose mirror channel about channel {kc} is outside the cube")
     sym = mask.copy()
@@ -113,7 +134,11 @@ def asymmetry_3d(gal_dir):
     k, y, x = np.nonzero(sym)
     I = cube[k, y, x]
     I_mirror = cube[K - k, ny - 1 - y, nx - 1 - x]
-    den = float(np.abs(I + I_mirror).sum())
-    A = float(np.abs(I - I_mirror).sum()) / den
-    A_noise = 2 / np.sqrt(np.pi) * cube_noise(g) * len(I) / den
-    return Asymmetry(A, A_noise, A - A_noise, len(I), kc, vsys)
+    diff, tot = I - I_mirror, I + I_mirror
+    sig = cube_noise(g) if sigma is None else float(sigma)
+    den = float(np.abs(tot).sum())
+    A = float(np.abs(diff).sum()) / den
+    A_noise = 2 / np.sqrt(np.pi) * sig * len(I) / den
+    B = 2 * len(I) * sig ** 2       # what the noise adds to each sum of squares
+    A_sq = (float(np.sum(diff ** 2)) - B) / (float(np.sum(tot ** 2)) - B)
+    return Asymmetry(A, A_noise, A - A_noise, A_sq, len(I), kc, vsys)

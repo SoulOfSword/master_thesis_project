@@ -26,6 +26,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--n-bins", type=int, default=30)
+    p.add_argument("--disc-only", action="store_true",
+                   help="Keep only MORDOR discs (IsDisc == 1) and tag the "
+                        "output PDF with _disc.")
     p.add_argument("--out", type=Path, default=None)
     args = p.parse_args()
 
@@ -60,7 +63,10 @@ def main():
         for model in models:
             if model not in panel_data[snap]:
                 continue
-            mstar = panel_data[snap][model]["Mstar"]
+            arrays = panel_data[snap][model]
+            mstar = arrays["Mstar"]
+            if args.disc_only:
+                mstar = mstar[np.asarray(arrays["IsDisc"]).astype(int) == 1]
             mstar = mstar[mstar > 0]
             if len(mstar) == 0:
                 continue
@@ -73,8 +79,9 @@ def main():
         ax.legend(fontsize=12)
     axes[0].set_ylabel("N galaxies", fontsize=16)
 
+    disc_tag = "_disc" if args.disc_only else ""
     out_path = args.out or (fig_root / "morphology"
-                            / "sample_histogram_mosaic_redshift.pdf")
+                            / f"sample_histogram_mosaic_redshift{disc_tag}.pdf")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"[plot_sample_histogram_mosaic] saved {out_path}")

@@ -24,8 +24,8 @@ def component_fractions(df):
 
 
 def disc_fraction_binned(log_m, is_disc, bins, n_min=5,
-                         confidence_level=0.95):
-    """Binned disc fraction with Wilson 95% CI errorbars.
+                         confidence_level=0.683):
+    """Binned disc fraction with Wilson 1-sigma (68.3%) errorbars.
 
     Used by mosaic plots where bins are shared across models to ensure
     visual comparability.
@@ -35,7 +35,7 @@ def disc_fraction_binned(log_m, is_disc, bins, n_min=5,
         is_disc: 1D 0/1 array, same length as log_m.
         bins: bin edges (1D array).
         n_min: minimum per-bin galaxy count to plot a point.
-        confidence_level: Wilson interval level.
+        confidence_level: Wilson interval level (default 0.683 = 1 sigma).
 
     Returns:
         (centres, fracs, lo_err, hi_err) — all 1D, with lo_err and
