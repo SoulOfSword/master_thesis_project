@@ -1,18 +1,10 @@
 """Observable quantities and scaling relations."""
 
-from .kinematics import (
-    circular_velocity_from_mass,
+from .vcirc import (
     vcirc_disc_plane,
-    velocity_dispersion_3d,
-    velocity_dispersion_1d,
-    specific_angular_momentum,
-    specific_angular_momentum_vector,
-    v_over_sigma,
-    rotation_curve_from_particles,
-    half_mass_radius,
-    lambda_R,
-    compute_circularity,
-    disc_fraction,
+    vcirc2_components,
+    G_AREPO,
+    N_GL,
 )
 from .density import (
     measure_density_profile,
@@ -26,6 +18,8 @@ from .density import (
     compute_halo_sfe,
     compute_halo_total_sfr,
     measure_subhalo_cold_gas_all,
+    cold_gas_cells,
+    COLD_GAS_FIELDS,
 )
 from .scaling import (
     ScalingRelationFit,

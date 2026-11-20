@@ -27,6 +27,15 @@ Three modes:
                label, if any, leads the page title. Default output: the list file
                with a .pdf suffix.
 
+  --mode compare: the galaxies of --list (as in mode list), one page each, with
+               BBarolo's MOCK_pv_azim.pdf above its MOCK_maps_azim.pdf for the
+               galaxy's folder in the martini folder (left, titled "current") and
+               in --new-root (right, titled "new"), under a bold header naming the
+               galaxy: model | z | subID | label. The part of a label after " // "
+               goes on a second, plain line below the header. A missing plot
+               leaves a note in its place and is printed. The PDF's bookmarks carry
+               the headers. Default output: the list file with a .pdf suffix.
+
 In modes all and bins only MORDOR discs (IsDisc==1) are used. Galaxies without a
 MOCK_pv_azim.pdf are skipped and tallied. Each page title carries
     model | z | subID | logMstar | NRADII  (ring count from the rings file)
@@ -41,6 +50,7 @@ Usage:
   python scripts/mock/collate_pv.py --exclude config/problematic_discs.yaml  # gas-discs only
   python scripts/mock/collate_pv.py --mode calibration    # residual_calibration.yaml galaxies
   python scripts/mock/collate_pv.py --mode list --list ~/tmp/pv_few_rings.txt  # -> ~/tmp/pv_few_rings.pdf
+  python scripts/mock/collate_pv.py --mode compare --list <pilot>/pilot_pvs.txt --new-root <pilot>
 """
 
 import argparse
@@ -62,6 +72,9 @@ DEFAULT_MASS_EDGES = [9.5, 10.0, 10.5, 11.0, 11.5]  # log10(Mstar / Msun)
 # (key in the labels file, name in the page title), in page order
 CALIBRATION_CLASSES = (("discs", "disc"), ("unsure_discs", "unsure disc"),
                        ("perturbed", "perturbed"))
+# mode compare: plots per column, top to bottom; column titles
+COMPARE_PLOTS = ("MOCK_pv_azim.pdf", "MOCK_maps_azim.pdf")
+COMPARE_TITLES = ("current", "new")
 
 
 def _paths(cfg):
@@ -110,6 +123,61 @@ def _nrings(pv_pdf):
     return str(n)
 
 
+def _read_list(path):
+    """[(model, z, subID, label)] of a file of 'model z subID [label]' lines ('#' lines are
+    comments); label is '' when absent."""
+    rows = []
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        model, zs, sub, *label = line.split()
+        rows.append((model, float(zs), int(sub), " ".join(label)))
+    return rows
+
+
+def _add_compare_page(out, gal_dirs, header, subtitle=""):
+    """Append a page with the COMPARE_PLOTS of each galaxy folder (its bbarolo/) in a column,
+    the folders side by side under COMPARE_TITLES, with the header (bold) and the subtitle, if
+    any (plain, a line below), above them; a line too long for the page width gets a smaller
+    font. Each plot is scaled, keeping its proportions, into a cell the size of the largest
+    one. A missing or unreadable plot leaves a note in its place and is printed. Returns the
+    number of plots placed (0: no page added)."""
+    srcs = {}
+    for c, g in enumerate(gal_dirs):
+        for r, name in enumerate(COMPARE_PLOTS):
+            path = g / "bbarolo" / name
+            try:
+                srcs[c, r] = fitz.open(str(path))
+            except Exception as e:
+                print(f"  missing or unreadable {path}: {e}")
+    if not srcs:
+        return 0
+    W = max(s[0].rect.width for s in srcs.values())
+    H = max(s[0].rect.height for s in srcs.values())
+    strip, fs = 0.06 * H, 0.04 * H
+    width, sub = len(gal_dirs) * W, (0.045 * H if subtitle else 0)
+    top = strip + sub
+    page = out.new_page(width=width, height=top + strip + len(COMPARE_PLOTS) * H)
+    for text, font, size, y in ((header, "hebo", fs, 0.75 * strip), (subtitle, "helv", 0.75 * fs, strip + 0.75 * sub)):
+        if text:
+            size *= min(1, 0.95 * width / fitz.get_text_length(text, fontname=font, fontsize=size))
+            tw = fitz.get_text_length(text, fontname=font, fontsize=size)
+            page.insert_text(((width - tw) / 2, y), text, fontsize=size, fontname=font)
+    for c, title in enumerate(COMPARE_TITLES[:len(gal_dirs)]):
+        tw = fitz.get_text_length(title, fontname="helv", fontsize=fs)
+        page.insert_text(((c + 0.5) * W - tw / 2, top + 0.75 * strip), title, fontsize=fs, fontname="helv")
+        for r, name in enumerate(COMPARE_PLOTS):
+            rect = fitz.Rect(c * W, top + strip + r * H, (c + 1) * W, top + strip + (r + 1) * H)
+            if (c, r) in srcs:
+                page.show_pdf_page(rect, srcs[c, r], 0)
+            else:
+                page.insert_text((rect.x0 + 0.3 * W, rect.y0 + 0.5 * H), f"no {name}",
+                                 fontsize=fs, fontname="helv")
+    for s in srcs.values():
+        s.close()
+    return len(srcs)
+
+
 def _add_page(out, pv_pdf, title):
     """Append pv_pdf's first page onto a new titled page of `out`.
 
@@ -139,12 +207,15 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", choices=["all", "bins", "calibration", "list"], default="all")
+    p.add_argument("--mode", choices=["all", "bins", "calibration", "list", "compare"], default="all")
     p.add_argument("--labels", type=Path,
                    default=ROOT / "config" / "residual_calibration.yaml",
                    help="calibration galaxies for --mode calibration")
     p.add_argument("--list", type=Path, default=None,
-                   help="for --mode list: file of 'model z subID [label]' lines")
+                   help="for --mode list and compare: file of 'model z subID [label]' lines")
+    p.add_argument("--new-root", type=Path, default=None,
+                   help="for --mode compare: folder of the new cubes, laid out like the martini "
+                        "folder (z<z>/<model>/gal_<subID>), shown on the right")
     p.add_argument("--model", default="SIDM1",
                    choices=["CDM", "SIDM1", "vSIDM", "WDM3", "WDM5"])
     p.add_argument("--snap", type=int, default=21,
@@ -162,11 +233,13 @@ def main():
     snap_z = {int(k): float(v) for k, v in cfg["snap_z"].items()}
     mart, mdir = _paths(cfg)
 
-    if args.mode == "list" and args.list is None:
-        p.error("--mode list needs --list FILE")
+    if args.mode in ("list", "compare") and args.list is None:
+        p.error(f"--mode {args.mode} needs --list FILE")
+    if args.mode == "compare" and args.new_root is None:
+        p.error("--mode compare needs --new-root DIR")
     if args.out is None and args.mode == "calibration":
         args.out = ROOT / "figures" / "pvs" / "calibration" / "pv_calibration.pdf"
-    if args.out is None and args.mode == "list":
+    if args.out is None and args.mode in ("list", "compare"):
         args.out = args.list.with_suffix(".pdf")
     if args.out is None:
         subdir = "gas_discs" if args.exclude else "all"
@@ -221,24 +294,33 @@ def main():
                             skipped += 1
     elif args.mode == "list":
         z_snap = {z: s for s, z in snap_z.items()}
-        for line in args.list.read_text().splitlines():
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            model, zs, sub, *label = line.split()
-            z = float(zs)
-            pv = _pv_pdf(mart, model, z_snap[z], snap_z, int(sub))
+        for model, z, sub, label in _read_list(args.list):
+            pv = _pv_pdf(mart, model, z_snap[z], snap_z, sub)
             if not pv.exists():
                 print(f"  missing {pv}")
                 skipped += 1
                 continue
             info = json.loads((pv.parent.parent / "info.json").read_text())
             lm = f"{np.log10(info['Mstar']):.2f}" if info.get("Mstar") else "?"
-            title = ((" ".join(label) + " | ") if label else "") + (
+            title = ((label + " | ") if label else "") + (
                 f"{model} | z={z:g} | subID {sub} | logM*={lm} | NRADII={_nrings(pv)}")
             if _add_page(out, pv, title):
                 included += 1
             else:
                 skipped += 1
+    elif args.mode == "compare":
+        toc = []
+        for model, z, sub, label in _read_list(args.list):
+            gal = Path(f"z{z:g}") / model / f"gal_{sub:06d}"
+            title, _, subtitle = label.partition(" // ")
+            header = " | ".join([model, f"z={z:g}", f"subID {sub}"] + ([title] if title else []))
+            if _add_compare_page(out, [mart / gal, args.new_root / gal], header, subtitle):
+                included += 1
+                toc.append([1, header, len(out)])
+            else:
+                print(f"  no plots for {model} z={z:g} subID {sub}")
+                skipped += 1
+        out.set_toc(toc)
     else:  # bins: one representative per (snap, mass bin)
         edges = args.mass_edges
         # adjacent [lo,hi) bins, plus an open-ended top bin so the most

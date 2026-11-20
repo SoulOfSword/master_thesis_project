@@ -30,10 +30,13 @@ class GalaxyGas:
     mH_neutral_g: U.Quantity # (N,) Msun, total neutral H (HI+H2)
     mgas_g: U.Quantity       # (N,) Msun, total cell gas mass
     T_g: U.Quantity          # (N,) K
+    nH_g: U.Quantity         # hydrogen number density
     hsm_g: U.Quantity        # (N,) kpc, cell size (kernel smoothing)
     # stars
     xyz_s: U.Quantity        # (N_s,3) kpc, centred
+    vxyz_s: U.Quantity
     m_s: U.Quantity          # (N_s,) Msun
+    is_star_s: np.ndarray    # False for wind particles
     # geometry / meta
     L_hat: np.ndarray        # (3,) unit angular-momentum vector (neutral gas)
     redshift: float
@@ -75,7 +78,7 @@ def load_galaxy_gas(base_path, snap, subhalo_id, h=0.6774,
     if not isinstance(g, dict) or g.get("count", 0) == 0:
         raise RuntimeError(f"subhalo {subhalo_id} snap {snap}: no gas cells")
     s = il.snapshot.loadSubhalo(base_path, snap, subhalo_id, 4,
-                                fields=["Coordinates", "Masses"])
+                                fields=["Coordinates", "Masses", "Velocities", "GFM_StellarFormationTime"])
 
     sub = il.groupcat.loadSingle(base_path, snap, subhaloID=subhalo_id)
     pos0 = np.asarray(sub["SubhaloPos"], dtype=np.float64) # ckpc/h
@@ -109,7 +112,7 @@ def load_galaxy_gas(base_path, snap, subhalo_id, h=0.6774,
     nH = (X_H * rho_phys / C.m_p).to(U.cm ** -3)
 
     # neutral fraction (HI+H2), TNG correction on
-    from Hdecompose.atomic_frac import neutral_frac
+    from Hdecompose.RahmatiEtal2013 import neutral_frac   # where it is defined (Hdecompose 0.1.1 no longer re-exports it from atomic_frac)
     f_neutral = neutral_frac(
         z, nH, T, rho=rho_phys, Habundance=X_H * U.dimensionless_unscaled,
         SFR=sfr, mu=mu, gamma=GAMMA, fH=np.median(X_H),
@@ -133,13 +136,18 @@ def load_galaxy_gas(base_path, snap, subhalo_id, h=0.6774,
     if isinstance(s, dict) and s.get("count", 0) > 0:
         dxs = _periodic_center(np.asarray(s["Coordinates"], np.float64), pos0, box)
         xyz_s = (dxs * a / h) * U.kpc
+        vxyz_s = (np.asarray(s["Velocities"], np.float64) * np.sqrt(a) - vel0) * (U.km / U.s)
         m_s = (np.asarray(s["Masses"], np.float64) * 1e10 / h) * U.Msun
+        is_star_s = np.asarray(s["GFM_StellarFormationTime"]) > 0
     else:
         xyz_s = np.zeros((0, 3)) * U.kpc
+        vxyz_s = np.zeros((0, 3)) * (U.km / U.s)
         m_s = np.zeros(0) * U.Msun
+        is_star_s = np.zeros(0, dtype=bool)
 
     return GalaxyGas(
         xyz_g=xyz_g, vxyz_g=vxyz_g, mH_neutral_g=mH_neutral, mgas_g=mgas * U.Msun,
-        T_g=T, hsm_g=hsm, xyz_s=xyz_s, m_s=m_s, L_hat=L_hat,
+        T_g=T, nH_g=nH, hsm_g=hsm, xyz_s=xyz_s, vxyz_s=vxyz_s, m_s=m_s, is_star_s=is_star_s,
+        L_hat=L_hat,
         redshift=float(z), a=float(a), h=float(h),
         subhalo_id=int(subhalo_id), snap=int(snap))

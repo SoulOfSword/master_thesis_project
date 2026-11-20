@@ -3,6 +3,11 @@
 Galaxy at 5 Mpc, 5" pixels, 30" beam (~720 pc), 30 km/s channels x64,
 inclined 60 deg at PA 90 (set from the gas angular momentum).
 
+Gas cut (CubeParams.disc_normal, z_cut_kpc, R_cut_kpc; disc_cut): MARTINI gets only the cells
+with |z| < z_cut_kpc and R < R_cut_kpc about the plane of unit normal disc_normal, and the
+cube is inclined about that normal instead of the one MARTINI's L_align would find from the
+cells it gets (_disc_rotation).
+
 Noise: the same `noise_rms` for every galaxy, or -- with `reference_snr` set --
 the same signal-to-noise for every galaxy: noise_rms = signal / reference_snr,
 with `signal` (measure_signal) taken from the galaxy's own noiseless,
@@ -14,10 +19,12 @@ from pathlib import Path
 
 import numpy as np
 import astropy.units as U
+from scipy.spatial.transform import Rotation
 
 from .gas import GalaxyGas
 
 _ARCSEC_PER_RAD = 206264.806
+SOURCE_RADIUS_FACTOR = 1.5 # gas cells given to MARTINI
 
 @dataclass
 class CubeParams:
@@ -30,25 +37,28 @@ class CubeParams:
     position_angle: U.Quantity = 90.0 * U.deg
     fov_factor: float = 4.0 # FOV = fov_factor * stellar half-mass radius
     max_npix: int = 400
-    # explicit FOV half-width [kpc], e.g. a larger cube for an extended galaxy:
-    # replaces the r50 rule, its 8-20 kpc clip and max_npix
     half_kpc: float = None
     add_noise: bool = True
     noise_rms: U.Quantity = 1.0e-5 * U.Jy / U.arcsec ** 2
-    # constant S/N: if set, noise_rms = signal / reference_snr for each galaxy
-    # (same Jy/arcsec^2 convention as noise_rms; from snr_reference.py)
     reference_snr: float = None
     signal_peak_fraction: float = 0.1  # signal = mean of voxels >= this x brightest voxel
     noise_seed: int = 0  # MARTINI noise RNG seed (0 = MARTINI's default)
+    # MARTINI 3 only: memory [GB] it may use to fill the cube before it switches to batches
+    # (insert_source_in_cube's mem_lim_GB). None = not passed (MARTINI 2 has no such argument)
+    mem_lim_GB: float = None
+    # gas cut, all three or none
+    disc_normal: tuple = None
+    z_cut_kpc: float = None
+    R_cut_kpc: float = None
 
 
 @dataclass
 class CubeResult:
     fits: Path
     npix: int
-    half_kpc: float   # FOV half-width used, kpc
-    signal: float     # Jy/beam, from the noiseless cube (nan if not measured)
-    noise_rms: float  # Jy/arcsec^2 given to MARTINI (0 if no noise)
+    half_kpc: float # FOV half-width used, kpc
+    signal: float # Jy/beam, from the noiseless cube (nan if not measured)
+    noise_rms: float # Jy/arcsec^2 given to MARTINI (0 if no noise)
 
 
 def measure_signal(cube, peak_fraction=0.1):
@@ -133,6 +143,89 @@ def _n_px(gas: GalaxyGas, p: CubeParams):
     return int(np.clip(npix + 4, 32, max_npix)), half_kpc
 
 
+def source_mask(gas, half_kpc):
+    """The gas cells MARTINI receives: those within SOURCE_RADIUS_FACTOR x half_kpc (kpc)."""
+    return np.linalg.norm(gas.xyz_g.to_value(U.kpc), axis=1) < SOURCE_RADIUS_FACTOR * half_kpc
+
+
+def rule_half_kpc(gas):
+    """FOV half-width (kpc) of the cube-size rule: _n_px with CubeParams' defaults, i.e.
+    fov_factor x the face-on stellar half-mass radius, clipped to 8-20 kpc."""
+    return _n_px(gas, CubeParams())[1]
+
+
+def disc_normal(gas):
+    """Unit normal of the disc plane, found as MARTINI does (L_align: angular momentum of the
+    innermost cells holding 30% of the neutral mass, at least 100) on the cells a cube of
+    the rule's half-width receives (source_mask, rule_half_kpc). Needs no cube."""
+    from martini.sources._L_align import L_align
+    keep = source_mask(gas, rule_half_kpc(gas))
+    return L_align(gas.xyz_g[keep].T, gas.vxyz_g[keep].T, gas.mH_neutral_g[keep])[2]
+
+
+def disc_coords(xyz, zhat):
+    """(height z, cylindrical radius R) of positions xyz about the plane of unit normal zhat."""
+    z = xyz @ zhat
+    return z, np.linalg.norm(xyz - np.outer(z, zhat), axis=1)
+
+
+def disc_velocities(xyz, vel, zhat):
+    """(v_R, v_phi, v_z) of velocities vel at positions xyz about the plane of unit normal
+    zhat; v_phi > 0 for rotation in the sense of zhat."""
+    z, R = disc_coords(xyz, zhat)
+    e_R = (xyz - np.outer(z, zhat)) / R[:, None]
+    return np.sum(vel * e_R, axis=1), np.sum(vel * np.cross(zhat, e_R), axis=1), vel @ zhat
+
+
+def _weighted_quantile(x, w, q):
+    """Value of x below which the fraction q of the total weight w lies."""
+    pos = w > 0
+    if not pos.any():
+        raise ValueError("no weight to take a quantile of")
+    order = np.argsort(x[pos])
+    cum = np.cumsum(w[pos][order])
+    return float(np.interp(q * cum[-1], cum, x[pos][order]))
+
+
+def layer_radii(gas, zhat, z_cut, qs):
+    """Radii (kpc) holding the fractions qs of the neutral hydrogen with |z| < z_cut about the
+    plane of unit normal zhat."""
+    z, R = disc_coords(gas.xyz_g.to_value(U.kpc), zhat)
+    layer = np.abs(z) < z_cut
+    m = gas.mH_neutral_g.to_value(U.Msun)[layer]
+    return [_weighted_quantile(R[layer], m, q) for q in qs]
+
+
+def disc_cut(gas, zhat, r_half_star, k_z=5.0, q_R=0.99):
+    """Gas cells near the disc plane of unit normal zhat: |z| < k_z z_half and R < R_cut.
+
+    z_half is the half-mass height of the neutral hydrogen within R < 2 r_half_star (kpc);
+    R_cut is the radius holding the fraction q_R of the neutral hydrogen with
+    |z| < k_z z_half. Returns (mask of the kept cells, z_half, z_cut, R_cut), lengths in kpc.
+    """
+    z, R = disc_coords(gas.xyz_g.to_value(U.kpc), zhat)
+    m = gas.mH_neutral_g.to_value(U.Msun)
+    inner = R < 2 * r_half_star
+    z_half = _weighted_quantile(np.abs(z[inner]), m[inner], 0.5)
+    z_cut = k_z * z_half
+    R_cut = layer_radii(gas, zhat, z_cut, [q_R])[0]
+    return (np.abs(z) < z_cut) & (R < R_cut), z_half, z_cut, R_cut
+
+
+def _disc_rotation(zhat, incl, pa):
+    """The rotation MARTINI's SPHSource.rotate makes for L_coords(incl=incl, pa=pa), with the unit
+    normal zhat in place of the axis its L_align finds: the same face-on frame built around
+    zhat (L_align, Laxis="x"), then the inclination about y and the position angle about x."""
+    xaxis = np.ones(3) / np.sqrt(3)
+    xhat = xaxis - (xaxis @ zhat) * zhat
+    xhat /= np.linalg.norm(xhat)
+    face_on = np.vstack([zhat, xhat, np.cross(zhat, xhat)])
+    pa_rot = pa - (90 if incl >= 0 else 270) * U.deg
+    return (Rotation.from_euler("x", pa_rot.to_value(U.rad))
+            * Rotation.from_euler("y", incl.to_value(U.rad))
+            * Rotation.from_matrix(face_on))
+
+
 def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
     """Generate and write the MARTINI datacube. Returns a CubeResult."""
     from martini import Martini, DataCube
@@ -147,7 +240,18 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
     npix, half_kpc = _n_px(gas, p)
 
     # only gas near the disc matters for the cube; drop the far filaments
-    keep = np.linalg.norm(gas.xyz_g.to_value(U.kpc), axis=1) < 1.5 * half_kpc
+    keep = source_mask(gas, half_kpc)
+    cut = (p.disc_normal, p.z_cut_kpc, p.R_cut_kpc)
+    if any(v is None for v in cut) and any(v is not None for v in cut):
+        raise ValueError(f"disc_normal, z_cut_kpc and R_cut_kpc go together, got {cut}")
+    if p.disc_normal is None:
+        orientation = {"L_coords": L_coords(incl=p.inclination, pa=p.position_angle)}
+    else:
+        zhat = np.asarray(p.disc_normal, dtype=float)
+        zhat = zhat / np.linalg.norm(zhat)
+        z, R = disc_coords(gas.xyz_g.to_value(U.kpc), zhat)
+        keep &= (np.abs(z) < p.z_cut_kpc) & (R < p.R_cut_kpc)
+        orientation = {"rotation": _disc_rotation(zhat, p.inclination, p.position_angle)}
 
     # the source is defined by the gas properties, but the cube is defined by the parameters; the source is centred on the galaxy and oriented by the
     # gas angular momentum, but the cube is oriented by the position angle parameter; the source has a systemic velocity set by the gas, but the cube is centred on zero velocity
@@ -159,7 +263,7 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
         T_g=gas.T_g[keep],
         hsm_g=gas.hsm_g[keep],
         h=gas.h,
-        L_coords=L_coords(incl=p.inclination, pa=p.position_angle),
+        **orientation,
     )
 
     datacube = DataCube(
@@ -176,8 +280,10 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
     M = Martini(source=source, datacube=datacube, beam=beam, noise=None,
                 sph_kernel=sph_kernel, spectral_model=spectral_model,
                 quiet=True)
-    M.init_spectra()
-    M.insert_source_in_cube(ncpu=ncpu)
+    if p.mem_lim_GB is None:
+        M.insert_source_in_cube(ncpu=ncpu)
+    else:
+        M.insert_source_in_cube(ncpu=ncpu, mem_lim_GB=p.mem_lim_GB)
 
     signal = float("nan")
     rms = p.noise_rms if p.add_noise else None
@@ -194,7 +300,10 @@ def build_cube(gas: GalaxyGas, out_fits, params: CubeParams = None, ncpu=1):
         M._datacube = noiseless
         rms = signal / p.reference_snr * U.Jy / U.arcsec ** 2
     if rms is not None:
-        M.noise = GaussianNoise(rms=rms, seed=p.noise_seed)
+        # MARTINI takes the rms in Jy/beam (MARTINI 3 refuses Jy/arcsec^2); MARTINI 2 made
+        # this same conversion itself, so the noise is unchanged
+        M.noise = GaussianNoise(rms=rms.to(U.Jy / U.beam, equivalencies=U.beam_angular_area(beam.area)),
+                                seed=p.noise_seed)
         M.add_noise()
     M.convolve_beam()
     if not p.add_noise:

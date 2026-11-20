@@ -1,8 +1,9 @@
 """Stellar-halo mass relation figures from the mock disc sample.
 
-STANDARD  (--relation standard): 2x3 mosaic, one panel per pipeline redshift,
-log10 Mstar vs log10 M200c for the usable MORDOR discs (the sample from
-galaxy_sidm.mock.tables.assemble: IsDisc==1, bbarolo_rc==0, not hand-flagged).
+STANDARD  (--relation standard): one panel per redshift (z = 0 -> 5, two rows,
+galaxy_sidm.viz.panel_grid), log10 Mstar vs log10 M200c for the usable discs (the sample
+from galaxy_sidm.mock.tables.assemble: the final sample, tables.final_sample -- MORDOR discs
+whose neutral gas passes tables.DISC_RULE -- with bbarolo_rc==0).
 Per DM model: scatter + a running-median line so the model comparison stays
 readable where the clouds overlap. Colours from config model_colors.
 
@@ -14,8 +15,8 @@ mass ratio at fixed stellar mass,
 plotted AGAINST Mstar (per your spec; f_V(z)/f_V(z0) == 1 by assumption, so no
 velocities enter anywhere). Galaxies are binned in log10 Mstar; per
 (model, z, bin) f_Mstar = median(Mstar/M200c) over the discs in the bin; each
-value is divided by the SAME bin's value at the reference z0 (default 0.5 --
-the lowest MORDOR sample; there is no z=0 run yet). One panel per DM model,
+value is divided by the SAME bin's value at the reference z0 (default 0.5, the
+lowest redshift of all three models: SIDM1 has no z = 0 run). One panel per DM model,
 one line per redshift, unity line = z0. Bins with fewer than --min-count discs
 at either z or z0 are left as gaps. The full numeric table is printed.
 
@@ -43,6 +44,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config
 from galaxy_sidm.mock.tables import assemble, MODELS
+from galaxy_sidm.viz import legend_entries, panel_grid
 
 plt.rcParams.update({
     # paper font: bundled Computer Modern (cmr10) -- do NOT use usetex here
@@ -78,10 +80,9 @@ def _running_median(x, y, nbins=12, min_pts=8):
 # --------------------------------------------------------------- standard ---
 def plot_standard(rows, colors, outdir):
     """Mstar vs M200c mosaic: scatter + running median per model, per z."""
-    zs = sorted({r["z"] for r in rows}, reverse=True)
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10), sharex=True, sharey=True,
-                             constrained_layout=True)
-    for ax, z in zip(axes.flat, zs):
+    zs = sorted({r["z"] for r in rows})
+    fig, axes, bottom, left = panel_grid(len(zs), (16 / 3, 5), constrained_layout=True)
+    for ax, z in zip(axes, zs, strict=True):
         for model in MODELS:
             sel = [r for r in rows if r["z"] == z and r["model"] == model]
             if not sel:
@@ -95,11 +96,11 @@ def plot_standard(rows, colors, outdir):
                 ax.plot(cen, med, c=colors[model], lw=3.0, zorder=5)
         ax.set_title(rf"$z = {z:g}$")
         ax.grid(alpha=0.25, lw=0.6)
-    for ax in axes[-1, :]:
+    for ax in bottom:
         ax.set_xlabel(r"$\log_{10}\,M_{200c}\ \,[M_\odot]$")
-    for ax in axes[:, 0]:
+    for ax in left:
         ax.set_ylabel(r"$\log_{10}\,M_\star\ \,[M_\odot]$")
-    leg = axes.flat[0].legend(frameon=False, markerscale=1.6, handletextpad=0.2,
+    leg = axes[0].legend(*legend_entries(axes, MODELS), frameon=False, markerscale=1.6, handletextpad=0.2,
                               loc="upper left")
     for h in leg.legend_handles:
         h.set_alpha(1.0)
@@ -177,14 +178,12 @@ def main():
                    help="log10(Mstar) bin edges for the modified relation.")
     p.add_argument("--min-count", type=int, default=5,
                    help="Min discs per (model, z, Mstar bin) to form a median.")
-    p.add_argument("--exclude", type=Path,
-                   default=ROOT / "config" / "problematic_discs.yaml")
     p.add_argument("--outdir", type=Path, default=ROOT / "figures" / "shmr")
     args = p.parse_args()
 
     cfg = load_config(None)
     colors = cfg["model_colors"]
-    rows = assemble(cfg, exclude_yaml=args.exclude)
+    rows = assemble(cfg)
     rows = [r for r in rows if r["Mstar"] > 0 and r["M200c"] > 0]
     if not rows:
         print("no usable discs -- has the pipeline + BBarolo fits run?")

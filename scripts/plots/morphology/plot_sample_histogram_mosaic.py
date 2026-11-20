@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config, load_flat
+from galaxy_sidm.viz import panel_grid
 
 
 def main():
@@ -51,11 +52,7 @@ def main():
             arrays, _ = load_flat(path)
             panel_data[snap][model] = arrays
 
-    n_cols = len(snaps)
-    fig, axes = plt.subplots(1, n_cols, figsize=(4 * n_cols, 5),
-                              sharey=True, constrained_layout=True)
-    if n_cols == 1:
-        axes = [axes]
+    fig, axes, _, left = panel_grid(len(snaps), (4, 5), sharex=False, constrained_layout=True)
 
     for j, snap in enumerate(snaps):
         ax = axes[j]
@@ -77,7 +74,8 @@ def main():
         ax.set_title(f"$z = {z:g}$", fontsize=16)
         ax.tick_params(labelsize=13)
         ax.legend(fontsize=12)
-    axes[0].set_ylabel("N galaxies", fontsize=16)
+    for ax in left:
+        ax.set_ylabel("N galaxies", fontsize=16)
 
     disc_tag = "_disc" if args.disc_only else ""
     out_path = args.out or (fig_root / "morphology"

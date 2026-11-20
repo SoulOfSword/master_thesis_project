@@ -65,7 +65,8 @@ foundation → results.
 ## Thread 5 — Particle kinematics & angular momentum (your future AM work)
 | file | lines | role | what |
 |---|---|---|---|
-| `src/.../observables/kinematics.py` | 380 | **core** | particle-level: dispersion, **angular momentum**, circularity, λ_R, disc fraction |
+| `src/.../observables/vcirc.py` | 247 | **core** | v_circ in the disc plane: per component from the particles' softened gravity (`vcirc2_components`), or from the stored potential (`vcirc_disc_plane`) |
+| `src/.../data/potential.py` | 255 | **core** | particles for v_circ: AREPO's softening per particle (`read_softening`, `h_gas`, `h_bh`, `h_collisionless`), `load_subhalo_particles`, `load_subhalo_potential` |
 | `src/.../observables/scaling.py` | 131 | helper | scaling-relation fits (TFR, mass-size, Fall) |
 
 ## Thread 6 — Mock HI → TFR / SHMR (the recent work)

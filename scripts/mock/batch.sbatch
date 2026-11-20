@@ -40,6 +40,16 @@ GROW_FOV="${GROW_FOV:-}"
 # BBAROLO_TIMEOUT=<seconds>: stop a BBarolo run after this long (build_galaxy.py's default is
 # 5400 = 1.5 h). Raise it, together with a longer --time, for the largest cubes.
 BBAROLO_TIMEOUT="${BBAROLO_TIMEOUT:-}"
+# MEM_LIM_GB=<GB>: memory MARTINI 3 may use to fill a cube before it works in batches
+# (build_galaxy.py --mem-lim-gb). Keep it well below --mem: in the 2026-10-05 test the 80 kpc
+# cubes' jobs peaked ~10 GB above it.
+MEM_LIM_GB="${MEM_LIM_GB:-}"
+# OUT_ROOT=<dir>: the galaxy folders go under <dir> instead of the martini folder (build_galaxy.py
+# --out-root, for tests); give sbatch --output=<dir>/logs/mock_%A_%a.out (the folder must exist)
+OUT_ROOT="${OUT_ROOT:-}"
+# DISC_CUT=1 (needs the stage cube): MARTINI gets only the gas near the disc plane
+# (build_galaxy.py --disc-cut)
+DISC_CUT="${DISC_CUT:-}"
 cd "$PROJ"
 
 start=$(( SLURM_ARRAY_TASK_ID * CHUNK + 1 ))
@@ -53,7 +63,8 @@ sed -n "${start},${end}p" "$MANIFEST" | while read -r model snap sub half; do
     echo "--- $(date +%T) $model snap=$snap sub=$sub${half:+ half_kpc=$half} ---"
     python3 -u scripts/mock/build_galaxy.py \
         --model "$model" --snap "$snap" --sub-id "$sub" \
-        --ncpu "$SLURM_CPUS_PER_TASK" --stages "$STAGES" ${half:+--half-kpc "$half"} ${GROW_FOV:+--grow-fov} ${BBAROLO_TIMEOUT:+--bbarolo-timeout "$BBAROLO_TIMEOUT"} \
+        --ncpu "$SLURM_CPUS_PER_TASK" --stages "$STAGES" ${half:+--half-kpc "$half"} ${GROW_FOV:+--grow-fov} ${BBAROLO_TIMEOUT:+--bbarolo-timeout "$BBAROLO_TIMEOUT"} ${MEM_LIM_GB:+--mem-lim-gb "$MEM_LIM_GB"} \
+        ${OUT_ROOT:+--out-root "$OUT_ROOT"} ${DISC_CUT:+--disc-cut} \
         || echo "!!! FAILED $model snap=$snap sub=$sub rc=$?"
 done
 echo "[$(date +%F_%T)] task=$SLURM_ARRAY_TASK_ID DONE"

@@ -6,15 +6,24 @@ order set by cfg['mosaic_snaps']), and plots the size-mass relation with
 running medians per stellar-mass bin.
 
 Two styles:
-    overlaid : 1xN_snaps, all models overlaid in each panel (default).
+    overlaid : one panel per snap (two rows, galaxy_sidm.viz.panel_grid), all models
+               overlaid in each panel (default).
     grid     : N_snaps x N_models, one model per column.
+
+Samples, all within the MORDOR galaxies (centrals with at least 10^4 star particles), so
+the Mstar range is that of the other figures:
+    default          every MORDOR galaxy (the mordor_sample files), picked from the
+                     all-centrals catalogs by GroupFirstSub
+    --disc-only      the MORDOR discs (the *_disc.hdf5 catalogs)
+    --final-sample   the final sample (galaxy_sidm.mock.tables.final_sample: MORDOR discs
+                     whose neutral gas passes DISC_RULE), picked like the default
 
 Stellar half-mass radius is the catalog's 'Rhalf_star' (comoving kpc, h removed;
 see build_catalog.py), converted to physical kpc with the snapshot redshift,
 R / (1 + z), so the relation can be compared with observations.
 
 Output (under cfg['paths']['fig_root']/size_mass/):
-    size_mass[.<style>].pdf
+    size_mass[_<style>][_disc | _final_sample].pdf
 """
 
 import argparse
@@ -31,6 +40,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config, load_flat
+from galaxy_sidm.mock.tables import final_sample
+from galaxy_sidm.viz import legend_entries, panel_grid
 
 
 def lighten(color, amount: float = 0.6):
@@ -66,6 +77,20 @@ def _running_median(log_m, log_r, mbins, n_min):
     return np.asarray(out_c), np.asarray(out_m)
 
 
+def _pick(by_key, subs_of, what):
+    """by_key with only the rows whose GroupFirstSub is in subs_of[(model, snap)]; galaxies of
+    subs_of missing from a catalog are printed."""
+    out = {}
+    for key, arrs in by_key.items():
+        subs = subs_of[key]
+        keep = np.isin(arrs["GroupFirstSub"], subs)
+        if keep.sum() != len(subs):
+            print(f"[plot_size_mass] {key}: {len(subs) - int(keep.sum())} of the {len(subs)} "
+                  f"{what} are not in the catalog")
+        out[key] = {k: np.asarray(v)[keep] for k, v in arrs.items()}
+    return out
+
+
 def _xy(arrs, mstar_floor, z):
     """Pull (log10 Mstar, log10 Rhalf_star in physical kpc) for valid centrals."""
     m = arrs["Mstar"]
@@ -76,11 +101,8 @@ def _xy(arrs, mstar_floor, z):
 
 def plot_overlaid(by_key, snaps, snap_z, models, colors, mbins, n_min,
                   mstar_floor, out_path):
-    """1xN_snaps, all models overlaid in each panel."""
-    fig, axes = plt.subplots(1, len(snaps),
-                             figsize=(4.2 * len(snaps), 4.2),
-                             sharex=True, sharey=True, squeeze=False)
-    axes = axes[0]
+    """One panel per snap in two rows, all models overlaid in each panel."""
+    fig, axes, bottom, left = panel_grid(len(snaps), (4.2, 4.2))
 
     for col, snap in enumerate(snaps):
         ax = axes[col]
@@ -107,12 +129,13 @@ def plot_overlaid(by_key, snaps, snap_z, models, colors, mbins, n_min,
 
         ax.set_title(rf"$z = {z:.1f}$" if z is not None else f"snap {snap}",
                      fontsize=16)
-        ax.set_xlabel(r"$\log_{10}(M_\star\;/\;\mathrm{M_\odot})$",
-                      fontsize=16)
-        if col == 0:
+        if ax in bottom:
+            ax.set_xlabel(r"$\log_{10}(M_\star\;/\;\mathrm{M_\odot})$",
+                          fontsize=16)
+        if ax in left:
             ax.set_ylabel(r"$\log_{10}(R_{1/2,\star}\;/\;\mathrm{pkpc})$",
                           fontsize=16)
-            ax.legend(fontsize=12)
+    axes[0].legend(*legend_entries(axes, models), fontsize=12)
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +202,10 @@ def main():
     p.add_argument("--disc-only", action="store_true",
                    help="Use only *_disc.hdf5 inputs and tag the output PDF "
                         "with _disc. Default: exclude *_disc.hdf5 files.")
+    p.add_argument("--final-sample", action="store_true",
+                   help="Keep only the galaxies of the final sample (tables.final_sample), "
+                        "picked from the all-centrals catalogs, and tag the output PDF with "
+                        "_final_sample.")
     p.add_argument("--style", choices=("overlaid", "grid"), default="overlaid")
     p.add_argument("--out-fig", type=Path, default=None,
                    help="Output figure path; defaults to "
@@ -194,6 +221,8 @@ def main():
     p.add_argument("--n-min-grid", type=int, default=5,
                    help="min galaxies per Mstar bin to plot a median (grid)")
     args = p.parse_args()
+    if args.disc_only and args.final_sample:
+        p.error("--disc-only and --final-sample are different samples; give one")
 
     cfg = load_config(args.config)
     models = list(cfg["models"])
@@ -207,13 +236,21 @@ def main():
               f"aborting")
         return 1
     by_key, snap_z_in = _load_catalogs(catalog_paths)
+    if args.final_sample:
+        groups, rule = final_sample(cfg)
+        print(f"[plot_size_mass] final sample: {rule}")
+        by_key = _pick(by_key, {key: groups.get(key, []) for key in by_key}, "final-sample galaxies")
+    elif not args.disc_only:
+        mordor = Path(cfg["paths"]["scratch_mordor"]) / "samples"
+        by_key = _pick(by_key, {(m, s): load_flat(mordor / f"mordor_sample_{m}_{s:03d}.hdf5")[0]["halo_ids"]
+                                for m, s in by_key}, "MORDOR galaxies")
     # cfg redshift map takes priority; fall back to per-catalog redshift.
     snap_z = {s: cfg["snap_z"].get(s, snap_z_in.get(s)) for s in snap_order}
 
     fig_root = Path(cfg["paths"]["fig_root"])
     if args.out_fig is None:
         suffix = "" if args.style == "overlaid" else f"_{args.style}"
-        disc_tag = "_disc" if args.disc_only else ""
+        disc_tag = "_disc" if args.disc_only else ("_final_sample" if args.final_sample else "")
         out_path = fig_root / "size_mass" / f"size_mass{suffix}{disc_tag}.pdf"
     else:
         out_path = args.out_fig

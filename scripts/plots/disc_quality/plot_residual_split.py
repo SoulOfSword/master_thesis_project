@@ -18,7 +18,8 @@ With --all [pv|cube|both]: the residuals of every galaxy in the mock manifest in
 (all models and redshifts), one column per redshift with the models side by side as
 small dots, the calibration galaxies on top, and in each panel the midpoint between
 the highest calibration disc and the lowest perturbed galaxy (when they don't
-overlap). Written as residual_split_pv_all.pdf / residual_split_cube_all.pdf. The cube
+overlap). Written as residual_split_pv_all.pdf / residual_split_cube_all.pdf, and the
+values as <processed>/gas_discs/residuals_<pv|cube>_all.csv (model, z, subID, res1, res2). The cube
 version reads every full cube, so run it on a compute node
 (scripts/slurm/residual_split_all.sbatch). Galaxies without a final fit have no
 residuals; they are listed and not plotted.
@@ -38,6 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import yaml
 import matplotlib
 matplotlib.use("Agg")
@@ -255,6 +257,10 @@ def main():
             calib = {cls: [RESIDUALS[kind](mart / zkey / model / f"gal_{s:06d}") for s in ids]
                      for cls, ids in subs.items()}
             models, zg, subs_all, vals = _all_residuals(cfg, mart, kind, args.workers)
+            table = Path(cfg["paths"]["scratch_processed"]) / "gas_discs" / f"residuals_{kind}_all.csv"
+            pd.DataFrame({"model": models, "z": zg, "subID": subs_all,
+                          f"{kind}_res1": vals[:, 0], f"{kind}_res2": vals[:, 1]}).to_csv(table, index=False)
+            print(f"wrote {table}")
             _figure_all(cfg, models, zg, subs_all, vals, calib, model, z, kind,
                         args.outdir / f"residual_split_{kind}_all.pdf")
         return 0

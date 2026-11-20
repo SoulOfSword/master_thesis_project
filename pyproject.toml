@@ -24,6 +24,7 @@ dependencies = [
     "tqdm",          # Progress bars (scripts/run_mordor.py orchestrator)
     "scikit-learn",
     "statsmodels",
+    "numba",         # Compiled gravity sum (observables/vcirc.py)
 ]
 
 [project.optional-dependencies]

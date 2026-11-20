@@ -38,6 +38,12 @@ within one beam (6 px) of the border along the major-axis row
 after every 3-ring fit, and `fov_capped` (true if the emission still reaches the
 border at the cap).
 
+Gas cut: with --disc-cut (stage cube), MARTINI gets only the gas cells with |z| < z_cut and
+R < R_cut about the disc plane, and the cube is inclined about that plane's normal (mock.cube,
+CubeParams.disc_normal). The normal, z_cut and R_cut are the galaxy's in
+<scratch_processed>/gas_kinematics (scripts/data/compute_gas_kinematics.py, mock.cube.disc_cut);
+info.json gets them as `disc_cut` (null for a cube without the cut).
+
 Usage:
     python scripts/mock/build_galaxy.py --model CDM --snap 21 --sub-id 0 \
         --ncpu 16
@@ -45,6 +51,8 @@ Usage:
         --ncpu 16 --stages barolo,kinematics      # final fit only, later
     python scripts/mock/build_galaxy.py --model CDM --snap 67 --sub-id 91726 \
         --ncpu 8 --stages cube,barolo_3rings --half-kpc 40 --grow-fov   # bigger cube until nothing reaches the border
+    python scripts/mock/build_galaxy.py --model CDM --snap 25 --sub-id 19064 \
+        --ncpu 8 --stages cube,barolo_3rings,barolo,kinematics --disc-cut --out-root <test dir>
 """
 
 import argparse
@@ -74,7 +82,7 @@ ALL_STAGES = ["sphview", "cube", "barolo_3rings", "barolo", "kinematics"]
 # what each stage writes: (files/dirs in the galaxy dir, info.json keys)
 STAGE_PRODUCTS = {
     "cube": (["cube.fits"], ["cube_npix", "cube_half_kpc", "cube_signal", "cube_noise_rms",
-                             "reference_snr"]),
+                             "reference_snr", "disc_cut"]),
     "barolo_3rings": (["bbarolo_3rings"], ["bbarolo_3rings_rc", "bbarolo_3rings_hole_rings",
                                            "emission_at_border", "fov_capped"]),
     "barolo": (["bbarolo"], ["nradii", "rings_arcsec", "ring_width_arcsec", "hole_rings_arcsec",
@@ -136,6 +144,13 @@ def clear_after(stage, gal_dir, info):
             info.pop(key, None)
 
 
+def write_info(info_path, info):
+    """Write info.json via a temporary file, so a job killed mid-write leaves the old file whole."""
+    tmp = info_path.with_name(info_path.name + ".tmp")
+    tmp.write_text(json.dumps(info, indent=2))
+    tmp.replace(info_path)
+
+
 def resolve_base_path(model, snap, res, cfg, override=None):
     """Path to the simulation output/ dir (shadow tree for CDM snap 21)."""
     import temet
@@ -164,6 +179,20 @@ def mordor_lookup(cfg, model, snap, sub_id):
     i = int(hit[0])
     return {"IsDisc": int(arrs["IsDisc"][i]),
             "Mstar": float(arrs["Mstar"][i])}
+
+
+def disc_cut_params(cfg, model, snap, sub_id):
+    """CubeParams fields of the galaxy's gas cut (disc_normal, z_cut_kpc, R_cut_kpc), from
+    <scratch_processed>/gas_kinematics (scripts/data/compute_gas_kinematics.py)."""
+    path = (Path(cfg["paths"]["scratch_processed"]) / "gas_kinematics"
+            / f"gas_kinematics_{model}_{snap:03d}.hdf5")
+    a, _ = load_flat(path)
+    hit = np.flatnonzero(np.asarray(a["halo_ids"], dtype=np.int64) == sub_id)
+    if len(hit) != 1:
+        raise KeyError(f"{model} snap {snap} sub {sub_id}: {len(hit)} rows in {path}")
+    i = int(hit[0])
+    return {"disc_normal": [float(x) for x in a["zhat"][i]], "z_cut_kpc": float(a["z_cut"][i]),
+            "R_cut_kpc": float(a["R_cut"][i])}
 
 
 def main():
@@ -200,10 +229,18 @@ def main():
     p.add_argument("--out-root", type=Path, default=None,
                    help="Write the galaxy folder under this directory instead of the martini "
                         "folder (for tests; the production folders are left alone)")
-    p.add_argument("--hsm-factor", type=float, default=1.0,
-                   help="Multiply the gas cell sizes given to MARTINI by this factor (default 1: "
-                        "the radius of the cell's equal-volume sphere). MARTINI reads them as the "
-                        "kernel's full width at half maximum; its own TNG reader uses 1.806")
+    p.add_argument("--hsm-factor", type=float, default=1.806,
+                   help="Multiply the gas cell sizes (radius of the cell's equal-volume sphere) given "
+                        "to MARTINI by this factor. MARTINI reads them as the kernel's full width at "
+                        "half maximum; the default 1.806 is what MARTINI's own TNG reader uses "
+                        "(until 2026-10-05 the pipeline used 1)")
+    p.add_argument("--mem-lim-gb", type=float, default=None,
+                   help="MARTINI 3 only: memory (GB) MARTINI may use to fill the cube before it "
+                        "works in batches (insert_source_in_cube's mem_lim_GB). Default: not passed")
+    p.add_argument("--disc-cut", action="store_true",
+                   help="Give MARTINI only the gas near the disc plane (|z| < z_cut, R < R_cut) and "
+                        "incline the cube about the plane's normal, all three from "
+                        "<scratch_processed>/gas_kinematics. Needs the stage cube")
     args = p.parse_args()
 
     cfg = load_config(args.config)
@@ -215,6 +252,12 @@ def main():
         p.error(f"unknown stage(s) {sorted(unknown)}; choose from {ALL_STAGES}")
     if args.grow_fov and not {"cube", "barolo_3rings"} <= set(stages):
         p.error("--grow-fov needs the stages cube and barolo_3rings")
+    if args.disc_cut and "cube" not in stages:
+        p.error("--disc-cut needs the stage cube")
+    cut = disc_cut_params(cfg, args.model, args.snap, args.sub_id) if args.disc_cut else None
+    if cut:
+        print(f"[build_galaxy] gas cut: |z| < {cut['z_cut_kpc']:.2f} kpc, R < {cut['R_cut_kpc']:.1f} kpc "
+              f"about the disc plane")
 
     root = args.out_root or Path(cfg["paths"]["scratch_processed"]).parent / "martini"
     gal_dir = root / f"z{z:g}" / args.model / f"gal_{args.sub_id:06d}"
@@ -229,8 +272,9 @@ def main():
     info_path = gal_dir / "info.json"
     try:
         info = json.loads(info_path.read_text()) if info_path.exists() else {}
-    except ValueError:
-        info = {}
+    except ValueError as e:
+        # never start over silently: the file holds the earlier stages' results
+        raise RuntimeError(f"{info_path} can't be read ({e}); not overwriting it") from e
     info.update({"model": args.model, "snap": args.snap, "redshift": z,
                  "sub_id": args.sub_id, "dir": str(gal_dir)})
     info.update(mordor_lookup(cfg, args.model, args.snap, args.sub_id))
@@ -248,10 +292,6 @@ def main():
         info["M_neutral"] = float(np.sum(gas.mH_neutral_g.to_value("Msun")))
         print(f"[build_galaxy] gas cells={info['n_gas']} stars={info['n_star']} "
               f"M_neutral={info['M_neutral']:.3e} Msun")
-        if args.hsm_factor != 1.0:
-            gas.hsm_g = gas.hsm_g * args.hsm_factor
-            print(f"[build_galaxy] cell sizes given to MARTINI multiplied by {args.hsm_factor:g}")
-        info["hsm_factor"] = args.hsm_factor
 
     cube_fits = gal_dir / "cube.fits"
     first_dir = gal_dir / "bbarolo_3rings"
@@ -274,6 +314,14 @@ def main():
         except Exception:
             print("[build_galaxy] sphview FAILED:\n" + traceback.format_exc())
 
+    # MARTINI's kernels: the cell sizes x --hsm-factor, only for the cube (the sphviewer image
+    # above uses the plain cell sizes)
+    if "cube" in stages:
+        if args.hsm_factor != 1.0:
+            gas.hsm_g = gas.hsm_g * args.hsm_factor
+            print(f"[build_galaxy] cell sizes given to MARTINI multiplied by {args.hsm_factor:g}")
+        info["hsm_factor"] = args.hsm_factor
+
     # tie BBarolo's DISTANCE to the same value MARTINI built the cube with, so
     # RAD(Kpc) is consistent across galaxies (not Vsys-guessed)
     fit = dict(inc_deg=60.0, pa_deg=90.0, beam_arcsec=RING_ARCSEC,
@@ -295,11 +343,13 @@ def main():
                 ref_snr = load_reference_snr(CubeParams())
                 res = build_cube(gas, cube_fits,
                                  CubeParams(reference_snr=ref_snr, noise_seed=args.sub_id,
-                                            half_kpc=half_kpc),
+                                            half_kpc=half_kpc, mem_lim_GB=args.mem_lim_gb,
+                                            **(cut or {})),
                                  ncpu=args.ncpu)
                 info.update({"cube_npix": int(res.npix), "cube_half_kpc": res.half_kpc,
                              "cube_signal": res.signal,
-                             "cube_noise_rms": res.noise_rms, "reference_snr": ref_snr})
+                             "cube_noise_rms": res.noise_rms, "reference_snr": ref_snr,
+                             "disc_cut": cut})
                 clear_after("cube", gal_dir, info)  # old fits belong to the old cube
                 cube_ok = True
                 print(f"[build_galaxy] cube ({res.npix}px, half-width {res.half_kpc:.1f} kpc, signal={res.signal:.3e} Jy/beam, "
@@ -334,7 +384,7 @@ def main():
             except Exception:
                 print("[build_galaxy] barolo_3rings FAILED:\n" + traceback.format_exc())
         # saved every round, so a job killed in a later round leaves consistent files
-        info_path.write_text(json.dumps(info, indent=2))
+        write_info(info_path, info)
 
         if not args.grow_fov:
             break
@@ -414,7 +464,7 @@ def main():
         except Exception:
             print("[build_galaxy] kinematics FAILED:\n" + traceback.format_exc())
 
-    info_path.write_text(json.dumps(info, indent=2))
+    write_info(info_path, info)
     print(f"[build_galaxy] wrote {info_path}")
     return 0
 

@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config, load_flat
+from galaxy_sidm.viz import panel_grid
 
 
 def main():
@@ -52,11 +53,7 @@ def main():
             arrays, _ = load_flat(path)
             panel_data[snap][model] = arrays
 
-    n_cols = len(snaps)
-    fig, axes = plt.subplots(1, n_cols, figsize=(4 * n_cols, 5),
-                              sharey=True, constrained_layout=True)
-    if n_cols == 1:
-        axes = [axes]
+    fig, axes, _, left = panel_grid(len(snaps), (4, 5), sharex=False, constrained_layout=True)
 
     for j, snap in enumerate(snaps):
         ax = axes[j]
@@ -85,7 +82,8 @@ def main():
         ax.set_xlim(0)
         ax.tick_params(labelsize=13)
         ax.legend(fontsize=12)
-    axes[0].set_ylabel("fraction of galaxies", fontsize=16)
+    for ax in left:
+        ax.set_ylabel("fraction of galaxies", fontsize=16)
 
     out_path = args.out or (fig_root / "morphology"
                             / "mthin_over_mstar_mosaic_redshift.pdf")
