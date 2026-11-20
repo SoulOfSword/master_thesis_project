@@ -8,6 +8,13 @@ import numpy as np
 CACHE_DIR = Path.home() / "master_thesis_project" / "data" / "profile_cache"
 
 
+def base_path(cfg, model):
+    """The simulation output/ dir of a model (trailing slash)."""
+    # AIDA stores vSIDM under L35n1080_vSIDM_correa, the others as L35n1080_<model>
+    run = "L35n1080_vSIDM_correa" if model == "vSIDM" else f"L35n1080_{model}"
+    return str(Path(cfg["paths"]["aida_root"]) / run / "output") + "/"
+
+
 def build_central_subhalo_catalog(sim):
     """Build a per-subhalo catalog tagged with parent-FoF properties.
 

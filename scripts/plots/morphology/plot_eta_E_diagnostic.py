@@ -127,6 +127,7 @@ def main():
     morph = np.asarray(gal.s["morph"])
     eta   = np.asarray(gal.s["jz_by_jzcirc"])
     te    = np.asarray(gal.s["te"])
+    te = te - te.max()
     mass  = np.asarray(gal.s["mass"])
 
     classified = morph != 0
@@ -152,8 +153,10 @@ def main():
     # If we used a cached HDF5, get Mstar/z from the snapshot for the title
     if Mstar_msun is None:
         Mstar_msun = float(mass.sum())
+        print(f"M_star={Mstar_msun:.3e} Msun")
         try:
-            redshift = float(gal.properties.get("z", np.nan))
+            redshift = float(gal.properties["z"])
+            print(f"z={redshift:.3f}")
         except Exception:
             redshift = float("nan")
 
@@ -173,13 +176,14 @@ def main():
     ax.set_facecolor("black")
     hb = ax.hexbin(eta[classified], te_n[classified],
                    gridsize=args.gridsize, mincnt=1,
-                   cmap="gist_stern", norm=LogNorm())
+                   cmap="inferno", norm=LogNorm(), rasterized=True)
     ax.axvline(0.7, color="white", ls="--", lw=1.2)
     ax.axhline(Ecut, color="white", ls="--", lw=1.2)
     ax.set_xlabel(r"$\eta = j_z / j_{\rm circ}(E)$", fontsize=16)
-    ax.set_ylabel(r"$E\,/\,|E|_{\rm max}$", fontsize=16)
+    ax.set_ylabel(r"$\epsilon = E\,/\,|E|_{\rm max}$", fontsize=16)
     ax.tick_params(labelsize=13)
-    fig.colorbar(hb, ax=ax, label="N stars per cell")
+    cbar = fig.colorbar(hb, ax=ax, location="top", label="N stars per cell", aspect=40)
+    cbar.ax.tick_params(labelsize=15)
 
     ax = axes[1]
     for k in [0, 5, 4, 3, 2, 1]:
@@ -197,14 +201,20 @@ def main():
 
     ax.set_xlim(-1.5, 1.5)
     ax.set_ylim(-1.05, 0.05)
-    z_str = f"{redshift:.2f}" if redshift is not None and np.isfinite(redshift) else "?"
-    fig.suptitle(
-        f"{args.model} subhalo {args.subhalo_id} - "
-        rf"$M_\star$={Mstar_msun:.2e} $M_\odot$, $z$={z_str}",
-        fontsize=16
-    )
+    # z_str = f"{redshift:.2f}" if redshift is not None and np.isfinite(redshift) else "?"
+    for ax, col in ((axes[0], "white"), (axes[1], "black")):
+        ax.text(0.7, 0.97, r" $\eta_{\rm cut}$", transform=ax.get_xaxis_transform(),
+                ha="left", va="top", color=col, fontsize=14)
+        ax.text(0.07, Ecut, rf"$\epsilon_{{\rm cut}}$", transform=ax.get_yaxis_transform(),
+                ha="right", va="bottom", color=col, fontsize=14)
+    # fig.suptitle(
+    #     f"{args.model} subhalo {args.subhalo_id} - "
+    #     rf"$M_\star$={Mstar_msun:.2e} $M_\odot$, $z$={z_str}",
+    #     fontsize=16
+    # )
     plt.savefig(out_fig, dpi=150, bbox_inches="tight")
     print(f"\n[plot_eta_E_diagnostic] saved {out_fig}")
+    # plt.show()
     return 0
 
 

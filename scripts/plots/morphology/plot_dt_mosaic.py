@@ -3,7 +3,7 @@
 For each (snap in `cfg['mosaic_snaps']`, model in `cfg['models']`), reads
 the mordor_sample HDF5 produced by `scripts/data/build_mordor_sample.py`
 and plots the binned fraction of disc galaxies (IsDisc == 1) with
-Wilson 95% CI errorbars.
+Wilson 1-sigma (68.3%) errorbars.
 
 Bins are **shared per panel**: within each redshift panel, log M_star
 from all models is pooled to define a common grid. Where galaxies are
@@ -12,7 +12,7 @@ panels are unchanged); only when a panel is too sparse to fill that grid
 (fewer than ~`--n-target` galaxies per model per bin) does it widen to
 fewer uniform bins, so high-z panels show a few well-populated points
 instead of many empty ones. The disc fraction is computed per model in
-those shared bins, with Wilson 95% CI errorbars clipped to non-negative
+those shared bins, with Wilson 1-sigma errorbars clipped to non-negative
 by `disc_fraction_binned`.
 Missing (model, snap) combos are skipped with a printed MISSING line.
 
@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from galaxy_sidm.io import load_config, load_flat
 from galaxy_sidm.morphology import disc_fraction_binned
+from galaxy_sidm.viz import panel_grid
 
 
 def load_sample(scratch_mordor: Path, model: str, snap: int):
@@ -114,11 +115,7 @@ def main():
                 continue
             panel_data[snap][model] = arrs
 
-    n_cols = len(snaps)
-    fig, axes = plt.subplots(1, n_cols, figsize=(4 * n_cols, 5),
-                              sharey=True, constrained_layout=True)
-    if n_cols == 1:
-        axes = [axes]
+    fig, axes, _, left = panel_grid(len(snaps), (4, 5), sharex=False, constrained_layout=True)
 
     tally_rows = []   # (z, snap, model, logM_lo, logM_hi, N, N_disc) per bin
     for j, snap in enumerate(snaps):
@@ -182,7 +179,8 @@ def main():
         ax.set_title(f"$z = {z:g}$", fontsize=16)
         ax.set_ylim(0, 1)
 
-    axes[0].set_ylabel("disc fraction", fontsize=16)
+    for ax in left:
+        ax.set_ylabel("disc fraction", fontsize=16)
     axes[-1].legend(loc="upper right", fontsize=12)
 
     out_path = args.out or (fig_root / "morphology"

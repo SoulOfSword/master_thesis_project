@@ -28,8 +28,8 @@ PROJECT=/home2/s4636708/master_thesis_project
 cd "$PROJECT"
 
 # Edit to taste:
-MODELS=(CDM SIDM1 vSIDM)
-SNAPS=(67 50 33 25 21 17)
+MODELS=(CDM vSIDM)
+SNAPS=(99)
 
 # Compose the args:
 ARGS=(

@@ -446,6 +446,10 @@ def compute_halo_total_sfr(basePath, snap, halo_id):
     return gas["StarFormationRate"].sum()
 
 
+COLD_GAS_FIELDS = ["Masses", "InternalEnergy", "ElectronAbundance",
+                   "StarFormationRate", "Density", "GFM_Metals"]
+
+
 def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
                                  T_thresh_high=10**4.5, T_thresh_low=1e4,
                                  T_cold_phase=1000.0, sim=None):
@@ -468,15 +472,28 @@ def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
         Dict with keys 'SFR>0', 'T<1e4', 'T<10^4.5', 'sh03' — each the
         total cold-gas mass in Msun. Zeros if the subhalo has no gas.
     """
-    fields = ["Masses", "InternalEnergy", "ElectronAbundance",
-              "StarFormationRate", "Density", "GFM_Metals"]
     gas = il.snapshot.loadSubhalo(basePath, snap, subhalo_id, "gas",
-                                  fields=fields)
-    out = {"SFR>0": 0.0, "T<1e4": 0.0, "T<10^4.5": 0.0, "sh03": 0.0}
+                                  fields=COLD_GAS_FIELDS)
     if not isinstance(gas, dict) or gas.get("count", 0) == 0:
-        return out
+        return {"all": 0.0, "SFR>0": 0.0, "T<1e4": 0.0, "T<10^4.5": 0.0, "sh03": 0.0}
+    cells = cold_gas_cells(gas, h, T_thresh_high, T_thresh_low, T_cold_phase, sim)
+    return {k: float(v.sum()) for k, v in cells.items()}
 
-    masses_msun = gas["Masses"] * 1e10 / h
+
+def cold_gas_cells(gas, h=0.6774, T_thresh_high=10**4.5, T_thresh_low=1e4,
+                   T_cold_phase=1000.0, sim=None):
+    """Per-cell masses of the cold-gas definitions of measure_subhalo_cold_gas_all.
+
+    Args:
+        gas: loadSubhalo gas dict with COLD_GAS_FIELDS.
+        h, T_thresh_high, T_thresh_low, T_cold_phase, sim: as in
+            measure_subhalo_cold_gas_all.
+
+    Returns:
+        Dict with keys 'all', 'SFR>0', 'T<1e4', 'T<10^4.5', 'sh03', each the
+        mass (Msun) every cell counts with in that definition, 0 if none.
+    """
+    masses_msun = gas["Masses"].astype(np.float64) * 1e10 / h
     sfr = gas["StarFormationRate"]
     is_sf = sfr > 0
 
@@ -487,10 +504,6 @@ def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
     mu = 4.0 / (1.0 + 3.0*X_H + 4.0*X_H*gas["ElectronAbundance"])
     T_normal = (gamma_eos - 1.0) * mu * m_p * (gas["InternalEnergy"] * 1e10) / k_B
     T_eff = np.where(is_sf, T_cold_phase, T_normal)
-
-    out["SFR>0"]    = float(masses_msun[is_sf].sum())
-    out["T<1e4"]    = float(masses_msun[T_eff < T_thresh_low].sum())
-    out["T<10^4.5"] = float(masses_msun[T_eff < T_thresh_high].sum())
 
     w = np.zeros(len(masses_msun))
     w[(~is_sf) & (T_normal < T_thresh_high)] = 1.0
@@ -505,9 +518,12 @@ def measure_subhalo_cold_gas_all(basePath, snap, subhalo_id, h=0.6774,
             w[is_sf] = coldfrac
         else:
             w[is_sf] = 1.0
-    out["sh03"] = float((masses_msun * w).sum())
 
-    return out
+    return {"all": masses_msun,
+            "SFR>0": np.where(is_sf, masses_msun, 0.0),
+            "T<1e4": np.where(T_eff < T_thresh_low, masses_msun, 0.0),
+            "T<10^4.5": np.where(T_eff < T_thresh_high, masses_msun, 0.0),
+            "sh03": masses_msun * w}
 
 
 def compute_halo_sfe(basePath, snap, halo_id, h=0.6774):

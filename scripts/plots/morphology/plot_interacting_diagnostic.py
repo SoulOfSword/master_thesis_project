@@ -3,7 +3,7 @@
 For one (model, snap), splits the
 mordor_sample HDF5 into FULL / NON-INTERACTING / INTERACTING subsets
 using `sat_mass_ratio >= --m-ratio-min`, then plots binned D/T
-(IsDisc fraction) with Wilson 95% CI errorbars.
+(IsDisc fraction) with Wilson 1-sigma (68.3%) errorbars.
 
 Bins are shared across the three subsets within the panel (pooled
 log M_star across subsets defines the common grid); errorbars are
